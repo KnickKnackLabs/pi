@@ -122,24 +122,15 @@ describe("SessionManager append and tree traversal", () => {
 			expect(session.getBranch(id2).map((entry) => entry.id)).toEqual([id1, id2]);
 		});
 
-		it("appendCustomMessageEntryAt can preserve the active leaf", () => {
+		it("appendMessageAt can preserve the active leaf", () => {
 			const session = SessionManager.inMemory();
 
 			const id1 = session.appendMessage(userMsg("main root"));
 			const id2 = session.appendMessage(assistantMsg("main answer"));
 			const mainLeaf = session.appendMessage(userMsg("main continues"));
 
-			const sideQuestionId = session.appendCustomMessageEntryAt(id2, "side-question", "side q", true, undefined, {
-				preserveLeaf: true,
-			});
-			const sideAnswerId = session.appendCustomMessageEntryAt(
-				sideQuestionId,
-				"side-answer",
-				"side a",
-				true,
-				undefined,
-				{ preserveLeaf: true },
-			);
+			const sideQuestionId = session.appendMessageAt(id2, userMsg("side q"), { preserveLeaf: true });
+			const sideAnswerId = session.appendMessageAt(sideQuestionId, assistantMsg("side a"), { preserveLeaf: true });
 
 			expect(session.getLeafId()).toBe(mainLeaf);
 			expect(session.getBranch(mainLeaf).map((entry) => entry.id)).toEqual([id1, id2, mainLeaf]);
@@ -162,9 +153,7 @@ describe("SessionManager append and tree traversal", () => {
 				const rootId = session.appendMessage(userMsg("main root"));
 				const sourceId = session.appendMessage(assistantMsg("main answer"));
 				const mainLeaf = session.appendMessage(userMsg("main continues"));
-				const sideId = session.appendCustomMessageEntryAt(sourceId, "side-answer", "side branch", true, undefined, {
-					preserveLeaf: true,
-				});
+				const sideId = session.appendMessageAt(sourceId, userMsg("side branch"), { preserveLeaf: true });
 
 				expect(session.getLeafId()).toBe(mainLeaf);
 				const sessionFile = session.getSessionFile();
@@ -180,7 +169,7 @@ describe("SessionManager append and tree traversal", () => {
 					.split("\n")
 					.filter(Boolean)
 					.map((line) => JSON.parse(line));
-				const sideRecord = records.find((record) => record.type === "custom_message" && record.id === sideId);
+				const sideRecord = records.find((record) => record.type === "message" && record.id === sideId);
 				expect(sideRecord?.leafIdAfter).toBe(mainLeaf);
 			} finally {
 				rmSync(tempDir, { recursive: true, force: true });

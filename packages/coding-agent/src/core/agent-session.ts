@@ -2214,26 +2214,8 @@ export class AgentSession {
 				appendEntry: (customType, data) => {
 					this.sessionManager.appendCustomEntry(customType, data);
 				},
-				appendMessageAt: (parentId, message, options) => {
-					const entryId = this.sessionManager.appendMessageAt(parentId, message, options);
-					if (!options?.preserveLeaf) {
-						this.agent.state.messages = this.sessionManager.buildSessionContext().messages;
-					}
-					return entryId;
-				},
-				appendCustomMessageAt: (parentId, message, options) => {
-					const entryId = this.sessionManager.appendCustomMessageEntryAt(
-						parentId,
-						message.customType,
-						message.content,
-						message.display,
-						message.details,
-						options,
-					);
-					if (!options?.preserveLeaf) {
-						this.agent.state.messages = this.sessionManager.buildSessionContext().messages;
-					}
-					return entryId;
+				appendMessageAt: (parentId, message) => {
+					return this.sessionManager.appendMessageAt(parentId, message, { preserveLeaf: true });
 				},
 				setSessionName: (name) => {
 					this.setSessionName(name);

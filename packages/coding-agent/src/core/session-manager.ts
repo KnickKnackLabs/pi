@@ -1096,18 +1096,6 @@ export class SessionManager {
 		display: boolean,
 		details?: T,
 	): string {
-		return this.appendCustomMessageEntryAt(this.leafId, customType, content, display, details);
-	}
-
-	appendCustomMessageEntryAt<T = unknown>(
-		parentId: string | null,
-		customType: string,
-		content: string | (TextContent | ImageContent)[],
-		display: boolean,
-		details?: T,
-		options: AppendAtOptions = {},
-	): string {
-		this._assertParentId(parentId);
 		const entry: CustomMessageEntry<T> = {
 			type: "custom_message",
 			customType,
@@ -1115,12 +1103,9 @@ export class SessionManager {
 			display,
 			details,
 			id: generateId(this.byId),
-			parentId,
+			parentId: this.leafId,
 			timestamp: new Date().toISOString(),
 		};
-		if (options.preserveLeaf) {
-			entry.leafIdAfter = this.leafId;
-		}
 		this._appendEntry(entry);
 		return entry.id;
 	}
