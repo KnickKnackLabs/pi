@@ -21,6 +21,7 @@ import type {
 	AssistantMessageEventStream,
 	Context,
 	ImageContent,
+	Message,
 	Model,
 	OAuthCredentials,
 	OAuthLoginCallbacks,
@@ -50,6 +51,7 @@ import type { KeybindingsManager } from "../keybindings.ts";
 import type { CustomMessage } from "../messages.ts";
 import type { ModelRegistry } from "../model-registry.ts";
 import type {
+	AppendAtOptions,
 	BranchSummaryEntry,
 	CompactionEntry,
 	ReadonlySessionManager,
@@ -1201,6 +1203,16 @@ export interface ExtensionAPI {
 	/** Append a custom entry to the session for state persistence (not sent to LLM). */
 	appendEntry<T = unknown>(customType: string, data?: T): void;
 
+	/** Append a user, assistant, or tool-result message under any existing session entry. */
+	appendMessageAt(parentId: string | null, message: Message, options?: AppendAtOptions): string;
+
+	/** Append a custom message under any existing session entry. */
+	appendCustomMessageAt<T = unknown>(
+		parentId: string | null,
+		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">,
+		options?: AppendAtOptions,
+	): string;
+
 	// =========================================================================
 	// Session Metadata
 	// =========================================================================
@@ -1425,6 +1437,14 @@ export type SendUserMessageHandler = (
 
 export type AppendEntryHandler = <T = unknown>(customType: string, data?: T) => void;
 
+export type AppendMessageAtHandler = (parentId: string | null, message: Message, options?: AppendAtOptions) => string;
+
+export type AppendCustomMessageAtHandler = <T = unknown>(
+	parentId: string | null,
+	message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">,
+	options?: AppendAtOptions,
+) => string;
+
 export type SetSessionNameHandler = (name: string) => void;
 
 export type GetSessionNameHandler = () => string | undefined;
@@ -1482,6 +1502,8 @@ export interface ExtensionActions {
 	sendMessage: SendMessageHandler;
 	sendUserMessage: SendUserMessageHandler;
 	appendEntry: AppendEntryHandler;
+	appendMessageAt: AppendMessageAtHandler;
+	appendCustomMessageAt: AppendCustomMessageAtHandler;
 	setSessionName: SetSessionNameHandler;
 	getSessionName: GetSessionNameHandler;
 	setLabel: SetLabelHandler;

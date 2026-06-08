@@ -106,6 +106,87 @@ describe("SessionManager append and tree traversal", () => {
 			expect(entries[2].parentId).toBe(customId);
 		});
 
+		it("appendMessageAt appends under any existing parent", () => {
+			const session = SessionManager.inMemory();
+
+			const id1 = session.appendMessage(userMsg("main root"));
+			const id2 = session.appendMessage(assistantMsg("main answer"));
+			const _id3 = session.appendMessage(userMsg("main continues"));
+
+			const sideId = session.appendMessageAt(id1, userMsg("side question"));
+
+			const sideEntry = session.getEntry(sideId);
+			expect(sideEntry?.parentId).toBe(id1);
+			expect(session.getLeafId()).toBe(sideId);
+			expect(session.getBranch(sideId).map((entry) => entry.id)).toEqual([id1, sideId]);
+			expect(session.getBranch(id2).map((entry) => entry.id)).toEqual([id1, id2]);
+		});
+
+		it("appendCustomMessageEntryAt can preserve the active leaf", () => {
+			const session = SessionManager.inMemory();
+
+			const id1 = session.appendMessage(userMsg("main root"));
+			const id2 = session.appendMessage(assistantMsg("main answer"));
+			const mainLeaf = session.appendMessage(userMsg("main continues"));
+
+			const sideQuestionId = session.appendCustomMessageEntryAt(id2, "side-question", "side q", true, undefined, {
+				preserveLeaf: true,
+			});
+			const sideAnswerId = session.appendCustomMessageEntryAt(
+				sideQuestionId,
+				"side-answer",
+				"side a",
+				true,
+				undefined,
+				{ preserveLeaf: true },
+			);
+
+			expect(session.getLeafId()).toBe(mainLeaf);
+			expect(session.getBranch(mainLeaf).map((entry) => entry.id)).toEqual([id1, id2, mainLeaf]);
+			expect(session.getBranch(sideAnswerId).map((entry) => entry.id)).toEqual([
+				id1,
+				id2,
+				sideQuestionId,
+				sideAnswerId,
+			]);
+			expect(session.getEntry(sideQuestionId)?.parentId).toBe(id2);
+			expect(session.getEntry(sideAnswerId)?.parentId).toBe(sideQuestionId);
+		});
+
+		it("persists preserved leaf position for append-at-parent entries", () => {
+			const tempDir = join(tmpdir(), `session-preserve-leaf-${Date.now()}`);
+			mkdirSync(tempDir, { recursive: true });
+
+			try {
+				const session = SessionManager.create(tempDir, tempDir);
+				const rootId = session.appendMessage(userMsg("main root"));
+				const sourceId = session.appendMessage(assistantMsg("main answer"));
+				const mainLeaf = session.appendMessage(userMsg("main continues"));
+				const sideId = session.appendCustomMessageEntryAt(sourceId, "side-answer", "side branch", true, undefined, {
+					preserveLeaf: true,
+				});
+
+				expect(session.getLeafId()).toBe(mainLeaf);
+				const sessionFile = session.getSessionFile();
+				expect(sessionFile).toBeDefined();
+
+				const reopened = SessionManager.open(sessionFile!, tempDir);
+				expect(reopened.getLeafId()).toBe(mainLeaf);
+				expect(reopened.getBranch(mainLeaf).map((entry) => entry.id)).toEqual([rootId, sourceId, mainLeaf]);
+				expect(reopened.getBranch(sideId).map((entry) => entry.id)).toEqual([rootId, sourceId, sideId]);
+
+				const records = readFileSync(sessionFile!, "utf-8")
+					.trim()
+					.split("\n")
+					.filter(Boolean)
+					.map((line) => JSON.parse(line));
+				const sideRecord = records.find((record) => record.type === "custom_message" && record.id === sideId);
+				expect(sideRecord?.leafIdAfter).toBe(mainLeaf);
+			} finally {
+				rmSync(tempDir, { recursive: true, force: true });
+			}
+		});
+
 		it("leaf pointer advances after each append", () => {
 			const session = SessionManager.inMemory();
 
