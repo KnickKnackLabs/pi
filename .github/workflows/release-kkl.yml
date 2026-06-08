@@ -1,0 +1,89 @@
+name: KKL Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Fork release tag, e.g. v0.79.0-kkl.1"
+        required: true
+        type: string
+      source_ref:
+        description: "Source ref to release (defaults to main)"
+        required: false
+        type: string
+        default: main
+
+permissions: {}
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ github.event.inputs.tag }}
+      SOURCE_REF: ${{ github.event.inputs.source_ref || 'main' }}
+    steps:
+      - name: Validate tag shape
+        run: |
+          case "$RELEASE_TAG" in
+            v*-kkl.*) ;;
+            *)
+              echo "RELEASE_TAG must look like vX.Y.Z-kkl.N" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_REF }}
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Verify package version matches tag
+        run: |
+          expected="${RELEASE_TAG#v}"
+          actual="$(node -p "require('./packages/coding-agent/package.json').version")"
+          if [ "$actual" != "$expected" ]; then
+            echo "packages/coding-agent version $actual does not match $expected" >&2
+            exit 1
+          fi
+
+      - name: Build binaries
+        run: ./scripts/build-binaries.sh
+
+      - name: Create release notes
+        run: |
+          cat > /tmp/release-notes.md <<EOF
+          KKL fork release ${RELEASE_TAG}.
+
+          Based on upstream Pi ${RELEASE_TAG%%-kkl.*} with KnickKnackLabs fork patches.
+          EOF
+
+      - name: Create GitHub Release and upload binaries
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          target="$(git rev-parse HEAD)"
+          cd packages/coding-agent/binaries
+          gh release create "${RELEASE_TAG}" \
+            --target "$target" \
+            --title "${RELEASE_TAG}" \
+            --notes-file /tmp/release-notes.md \
+            pi-darwin-arm64.tar.gz \
+            pi-darwin-x64.tar.gz \
+            pi-linux-x64.tar.gz \
+            pi-linux-arm64.tar.gz \
+            pi-windows-x64.zip \
+            pi-windows-arm64.zip
