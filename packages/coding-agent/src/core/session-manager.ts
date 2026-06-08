@@ -43,11 +43,17 @@ export interface NewSessionOptions {
 	parentSession?: string;
 }
 
+export interface AppendAtOptions {
+	preserveLeaf?: boolean;
+}
+
 export interface SessionEntryBase {
 	type: string;
 	id: string;
 	parentId: string | null;
 	timestamp: string;
+	/** Overrides the active leaf after replaying this entry. */
+	leafIdAfter?: string | null;
 }
 
 export interface SessionMessageEntry extends SessionEntryBase {
@@ -848,6 +854,14 @@ export class SessionManager {
 		return this.sessionFile;
 	}
 
+	private _leafIdAfterReplay(entry: SessionEntry): string | null {
+		if (entry.leafIdAfter === undefined) return entry.id;
+		if (entry.leafIdAfter === null || this.byId.has(entry.leafIdAfter)) {
+			return entry.leafIdAfter;
+		}
+		return entry.id;
+	}
+
 	private _buildIndex(): void {
 		this.byId.clear();
 		this.labelsById.clear();
@@ -856,7 +870,7 @@ export class SessionManager {
 		for (const entry of this.fileEntries) {
 			if (entry.type === "session") continue;
 			this.byId.set(entry.id, entry);
-			this.leafId = entry.id;
+			this.leafId = this._leafIdAfterReplay(entry);
 			if (entry.type === "label") {
 				if (entry.label) {
 					this.labelsById.set(entry.targetId, entry.label);
@@ -934,10 +948,16 @@ export class SessionManager {
 		}
 	}
 
+	private _assertParentId(parentId: string | null): void {
+		if (parentId !== null && !this.byId.has(parentId)) {
+			throw new Error(`Entry ${parentId} not found`);
+		}
+	}
+
 	private _appendEntry(entry: SessionEntry): void {
 		this.fileEntries.push(entry);
 		this.byId.set(entry.id, entry);
-		this.leafId = entry.id;
+		this.leafId = this._leafIdAfterReplay(entry);
 		this._persist(entry);
 	}
 
@@ -948,13 +968,25 @@ export class SessionManager {
 	 * These need to be appended via appendCompaction() and appendBranchSummary() methods.
 	 */
 	appendMessage(message: Message | CustomMessage | BashExecutionMessage): string {
+		return this.appendMessageAt(this.leafId, message);
+	}
+
+	appendMessageAt(
+		parentId: string | null,
+		message: Message | CustomMessage | BashExecutionMessage,
+		options: AppendAtOptions = {},
+	): string {
+		this._assertParentId(parentId);
 		const entry: SessionMessageEntry = {
 			type: "message",
 			id: generateId(this.byId),
-			parentId: this.leafId,
+			parentId,
 			timestamp: new Date().toISOString(),
 			message,
 		};
+		if (options.preserveLeaf) {
+			entry.leafIdAfter = this.leafId;
+		}
 		this._appendEntry(entry);
 		return entry.id;
 	}

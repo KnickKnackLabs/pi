@@ -21,6 +21,7 @@ import type {
 	AssistantMessageEventStream,
 	Context,
 	ImageContent,
+	Message,
 	Model,
 	OAuthCredentials,
 	OAuthLoginCallbacks,
@@ -1201,6 +1202,9 @@ export interface ExtensionAPI {
 	/** Append a custom entry to the session for state persistence (not sent to LLM). */
 	appendEntry<T = unknown>(customType: string, data?: T): void;
 
+	/** Append a user, assistant, or tool-result message under any existing session entry without changing the active leaf. */
+	appendMessageAt(parentId: string | null, message: Message): string;
+
 	// =========================================================================
 	// Session Metadata
 	// =========================================================================
@@ -1425,6 +1429,8 @@ export type SendUserMessageHandler = (
 
 export type AppendEntryHandler = <T = unknown>(customType: string, data?: T) => void;
 
+export type AppendMessageAtHandler = (parentId: string | null, message: Message) => string;
+
 export type SetSessionNameHandler = (name: string) => void;
 
 export type GetSessionNameHandler = () => string | undefined;
@@ -1482,6 +1488,7 @@ export interface ExtensionActions {
 	sendMessage: SendMessageHandler;
 	sendUserMessage: SendUserMessageHandler;
 	appendEntry: AppendEntryHandler;
+	appendMessageAt: AppendMessageAtHandler;
 	setSessionName: SetSessionNameHandler;
 	getSessionName: GetSessionNameHandler;
 	setLabel: SetLabelHandler;

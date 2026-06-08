@@ -60,6 +60,7 @@ describe("ExtensionRunner", () => {
 		sendMessage: () => {},
 		sendUserMessage: () => {},
 		appendEntry: () => {},
+		appendMessageAt: () => "",
 		setSessionName: () => {},
 		getSessionName: () => undefined,
 		setLabel: () => {},
@@ -425,6 +426,43 @@ describe("ExtensionRunner", () => {
 			expect(diagnostics).toEqual([]);
 			expect(runner.getCommand("shared-cmd:1")?.description).toBe("First command");
 			expect(runner.getCommand("shared-cmd:2")?.description).toBe("Second command");
+		});
+	});
+
+	describe("extension actions", () => {
+		it("delegates appendMessageAt through the extension API", async () => {
+			const extCode = `
+				export default function(pi) {
+					pi.registerCommand("record-side", {
+						description: "Record side branch",
+						handler: async () => {
+							const messageId = pi.appendMessageAt("parent-id", {
+								role: "user",
+								content: "side question",
+								timestamp: 123,
+							});
+							if (messageId !== "message-id") throw new Error("wrong id");
+						},
+					});
+				}
+			`;
+			fs.writeFileSync(path.join(extensionsDir, "append-at.ts"), extCode);
+			const appendMessageAt = vi.fn(() => "message-id");
+
+			const result = await discoverAndLoadExtensions([], tempDir, tempDir);
+			const runner = new ExtensionRunner(result.extensions, result.runtime, tempDir, sessionManager, modelRegistry);
+			runner.bindCore({ ...extensionActions, appendMessageAt }, extensionContextActions);
+
+			const command = runner.getCommand("record-side");
+			expect(command).toBeDefined();
+			if (!command) throw new Error("command not registered");
+			await command.handler("", runner.createCommandContext());
+
+			expect(appendMessageAt).toHaveBeenCalledWith("parent-id", {
+				role: "user",
+				content: "side question",
+				timestamp: 123,
+			});
 		});
 	});
 

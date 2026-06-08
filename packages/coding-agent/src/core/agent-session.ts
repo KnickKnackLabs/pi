@@ -2214,6 +2214,9 @@ export class AgentSession {
 				appendEntry: (customType, data) => {
 					this.sessionManager.appendCustomEntry(customType, data);
 				},
+				appendMessageAt: (parentId, message) => {
+					return this.sessionManager.appendMessageAt(parentId, message, { preserveLeaf: true });
+				},
 				setSessionName: (name) => {
 					this.setSessionName(name);
 				},
