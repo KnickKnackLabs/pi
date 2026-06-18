@@ -13,7 +13,7 @@ import {
 import type { Readable } from "node:stream";
 import crossSpawn from "cross-spawn";
 
-const EXIT_STDIO_GRACE_MS = 250;
+const EXIT_STDIO_GRACE_MS = 1000;
 
 export function spawnProcess(
 	command: string,

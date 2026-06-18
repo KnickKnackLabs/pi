@@ -34,7 +34,8 @@ describe.skipIf(process.platform === "win32")("issue #5303 bash output truncatio
 	it("captures output emitted after exit while a detached child holds stdout open", async () => {
 		// The shell exits immediately, but a backgrounded subshell keeps the stdout
 		// pipe open and emits ticks every 50ms, the last past the initial grace.
-		const command = 'printf "HEAD\\n"; ( for i in 1 2 3 4 5 6; do sleep 0.05; printf "TICK$i\\n"; done ) &';
+		const command =
+			'printf "HEAD\\n"; ( for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24; do sleep 0.05; printf "TICK$i\\n"; done ) &';
 		child = spawnProcess("/bin/sh", ["-c", command], {
 			stdio: ["ignore", "pipe", "pipe"],
 			detached: true,
@@ -49,7 +50,7 @@ describe.skipIf(process.platform === "win32")("issue #5303 bash output truncatio
 
 		expect(exitCode).toBe(0);
 		expect(output).toContain("HEAD");
-		expect(output).toContain("TICK6");
+		expect(output).toContain("TICK24");
 	});
 
 	it("resolves promptly when a detached child holds stdout open but stays quiet", async () => {
@@ -73,7 +74,7 @@ describe.skipIf(process.platform === "win32")("issue #5303 bash output truncatio
 
 		expect(exitCode).toBe(0);
 		expect(output).toContain("DONE");
-		// Must not wait for the 30s sleeper; the idle grace releases us in well under a second.
-		expect(elapsed).toBeLessThan(2000);
+		// Must not wait for the 30s sleeper; the idle grace releases us promptly.
+		expect(elapsed).toBeLessThan(5000);
 	});
 });
