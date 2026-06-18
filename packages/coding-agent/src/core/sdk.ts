@@ -109,17 +109,17 @@ export type { Skill } from "./skills.ts";
 export type { Tool } from "./tools/index.ts";
 
 export {
-	withFileMutationQueue,
+	createBashTool,
 	// Tool factories (for custom cwd)
 	createCodingTools,
+	createEditTool,
+	createFindTool,
+	createGrepTool,
+	createLsTool,
 	createReadOnlyTools,
 	createReadTool,
-	createBashTool,
-	createEditTool,
 	createWriteTool,
-	createGrepTool,
-	createFindTool,
-	createLsTool,
+	withFileMutationQueue,
 };
 
 // Helper Functions
@@ -303,6 +303,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			if (!auth.ok) {
 				throw new Error(auth.error);
 			}
+			const env = auth.env || options?.env ? { ...(auth.env ?? {}), ...(options?.env ?? {}) } : undefined;
 			const providerRetrySettings = settingsManager.getProviderRetrySettings();
 			const httpIdleTimeoutMs = settingsManager.getHttpIdleTimeoutMs();
 			// SDKs treat timeout=0 as 0ms (immediate timeout), not "no timeout".
@@ -314,6 +315,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			return streamSimple(model, context, {
 				...options,
 				apiKey: auth.apiKey,
+				env,
 				timeoutMs,
 				websocketConnectTimeoutMs,
 				maxRetries: options?.maxRetries ?? providerRetrySettings.maxRetries,
