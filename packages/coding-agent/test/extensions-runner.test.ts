@@ -84,6 +84,7 @@ describe("ExtensionRunner", () => {
 		shutdown: () => {},
 		getContextUsage: () => undefined,
 		compact: () => {},
+		queueCommand: () => {},
 		getSystemPrompt: () => "",
 	};
 

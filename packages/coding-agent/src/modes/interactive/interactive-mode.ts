@@ -1733,6 +1733,7 @@ export class InteractiveMode {
 					}
 				})();
 			},
+			queueCommand: (command, args, options) => this.session.queueCommand(command, args, options),
 			getSystemPrompt: () => this.session.systemPrompt,
 		});
 

@@ -1028,6 +1028,34 @@ ctx.compact({
 });
 ```
 
+### ctx.queueCommand(command, args?, options?)
+
+Queue an extension command to run with `ExtensionCommandContext` capabilities after the current agent turn finishes.
+This is the supported bridge from tools/events to command-only session-control APIs such as `ctx.navigateTree()`, `ctx.fork()`, `ctx.switchSession()`, and `ctx.reload()`.
+Queued commands are not added to the conversation as user messages and do not pass through the model.
+
+```typescript
+pi.registerCommand("apply-navigation", {
+  description: "Apply queued navigation",
+  handler: async (args, ctx) => {
+    await ctx.navigateTree(args, { summary: { summary: "Exact summary" } });
+  },
+});
+
+pi.registerTool({
+  name: "request_navigation",
+  label: "Request Navigation",
+  description: "Queue navigation after this turn",
+  parameters: Type.Object({ targetId: Type.String() }),
+  async execute(_id, params, _signal, _onUpdate, ctx) {
+    ctx.queueCommand("apply-navigation", params.targetId);
+    return { content: [{ type: "text", text: "Queued navigation." }] };
+  },
+});
+```
+
+Queued commands run after `agent_end`; if any queued commands run, Pi stops the old post-run continuation loop so automatic retry, compaction, or follow-up messages do not continue against stale session state.
+
 ### ctx.getSystemPrompt()
 
 Returns Pi's current system prompt string.
@@ -1272,7 +1300,7 @@ Important behavior:
 
 For predictable behavior, treat reload as terminal for that handler (`await ctx.reload(); return;`).
 
-Tools run with `ExtensionContext`, so they cannot call `ctx.reload()` directly. Use a command as the reload entrypoint, then expose a tool that queues that command as a follow-up user message.
+Tools run with `ExtensionContext`, so they cannot call `ctx.reload()` directly. Use a command as the reload entrypoint, then expose a tool that queues that command with `ctx.queueCommand()`.
 
 Example tool the LLM can call to trigger reload:
 
@@ -1294,10 +1322,10 @@ export default function (pi: ExtensionAPI) {
     label: "Reload Runtime",
     description: "Reload extensions, skills, prompts, and themes",
     parameters: Type.Object({}),
-    async execute() {
-      pi.sendUserMessage("/reload-runtime", { deliverAs: "followUp" });
+    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+      ctx.queueCommand("reload-runtime");
       return {
-        content: [{ type: "text", text: "Queued /reload-runtime as a follow-up command." }],
+        content: [{ type: "text", text: "Queued reload-runtime after this turn." }],
       };
     },
   });
@@ -1386,7 +1414,7 @@ pi.sendMessage({
 
 ### pi.sendUserMessage(content, options?)
 
-Send a user message to the agent. Unlike `sendMessage()` which sends custom messages, this sends an actual user message that appears as if typed by the user. Always triggers a turn.
+Send a user message to the agent. Unlike `sendMessage()` which sends custom messages, this sends an actual user message that appears as if typed by the user. Always triggers a turn. Slash-looking content sent this way is model-visible text; it does not dispatch extension commands. Use [`ctx.queueCommand()`](#ctxqueuecommandcommand-args-options) when a tool or event handler needs to run a real extension command after the current turn.
 
 ```typescript
 // Simple text message
