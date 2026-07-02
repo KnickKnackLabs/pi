@@ -85,6 +85,8 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 						customInstructions: navigateOptions?.customInstructions,
 						replaceInstructions: navigateOptions?.replaceInstructions,
 						label: navigateOptions?.label,
+						summary: navigateOptions?.summary,
+						fromExtension: navigateOptions?.summary !== undefined,
 					});
 					return { cancelled: result.cancelled };
 				},

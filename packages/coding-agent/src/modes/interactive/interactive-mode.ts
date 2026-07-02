@@ -1586,6 +1586,8 @@ export class InteractiveMode {
 						customInstructions: options?.customInstructions,
 						replaceInstructions: options?.replaceInstructions,
 						label: options?.label,
+						summary: options?.summary,
+						fromExtension: options?.summary !== undefined,
 					});
 					if (result.cancelled) {
 						return { cancelled: true };

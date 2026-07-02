@@ -76,6 +76,7 @@ import {
 	type ToolExecutionStartEvent,
 	type ToolExecutionUpdateEvent,
 	type ToolInfo,
+	type TreeNavigationOptions,
 	type TreePreparation,
 	type TurnEndEvent,
 	type TurnStartEvent,
@@ -253,6 +254,11 @@ function estimateMessagesTokens(messages: AgentMessage[]): number {
 	}
 	return tokens;
 }
+
+type AgentSessionNavigateTreeOptions = TreeNavigationOptions & {
+	/** Internal marker for summaries supplied through extension command context. */
+	fromExtension?: boolean;
+};
 
 // ============================================================================
 // Constants
@@ -2738,11 +2744,12 @@ export class AgentSession {
 	 * @param options.customInstructions Custom instructions for summarizer
 	 * @param options.replaceInstructions If true, customInstructions replaces the default prompt
 	 * @param options.label Label to attach to the branch summary entry
+	 * @param options.summary Exact branch summary to attach without invoking model summarization
 	 * @returns Result with editorText (if user message) and cancelled status
 	 */
 	async navigateTree(
 		targetId: string,
-		options: { summarize?: boolean; customInstructions?: string; replaceInstructions?: boolean; label?: string } = {},
+		options: AgentSessionNavigateTreeOptions = {},
 	): Promise<{ editorText?: string; cancelled: boolean; aborted?: boolean; summaryEntry?: BranchSummaryEntry }> {
 		const oldLeafId = this.sessionManager.getLeafId();
 
@@ -2751,8 +2758,8 @@ export class AgentSession {
 			return { cancelled: false };
 		}
 
-		// Model required for summarization
-		if (options.summarize && !this.model) {
+		// Model required only for generated summarization.
+		if (options.summarize && !options.summary && !this.model) {
 			throw new Error("No model available for summarization");
 		}
 
@@ -2772,13 +2779,15 @@ export class AgentSession {
 		let customInstructions = options.customInstructions;
 		let replaceInstructions = options.replaceInstructions;
 		let label = options.label;
+		const exactSummary = options.summary;
 
 		const preparation: TreePreparation = {
 			targetId,
 			oldLeafId,
 			commonAncestorId,
 			entriesToSummarize,
-			userWantsSummary: options.summarize ?? false,
+			userWantsSummary: options.summarize ?? exactSummary !== undefined,
+			summary: exactSummary,
 			customInstructions,
 			replaceInstructions,
 			label,
@@ -2789,7 +2798,7 @@ export class AgentSession {
 
 		try {
 			let extensionSummary: { summary: string; details?: unknown } | undefined;
-			let fromExtension = false;
+			let fromExtension = exactSummary !== undefined && options.fromExtension === true;
 
 			// Emit session_before_tree event
 			if (this._extensionRunner.hasHandlers("session_before_tree")) {
@@ -2803,7 +2812,7 @@ export class AgentSession {
 					return { cancelled: true };
 				}
 
-				if (result?.summary && options.summarize) {
+				if (result?.summary && options.summarize && !exactSummary) {
 					extensionSummary = result.summary;
 					fromExtension = true;
 				}
@@ -2823,7 +2832,10 @@ export class AgentSession {
 			// Run default summarizer if needed
 			let summaryText: string | undefined;
 			let summaryDetails: unknown;
-			if (options.summarize && entriesToSummarize.length > 0 && !extensionSummary) {
+			if (exactSummary) {
+				summaryText = exactSummary.summary;
+				summaryDetails = exactSummary.details;
+			} else if (options.summarize && entriesToSummarize.length > 0 && !extensionSummary) {
 				const model = this.model!;
 				const { apiKey, headers, env } = await this._getRequiredRequestAuth(model);
 				const branchSummarySettings = this.settingsManager.getBranchSummarySettings();

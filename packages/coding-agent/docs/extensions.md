@@ -1144,6 +1144,15 @@ const result = await ctx.navigateTree("entry-id-456", {
   replaceInstructions: false, // true = replace default prompt entirely
   label: "review-checkpoint",
 });
+
+// Or attach an exact summary without invoking model summarization:
+await ctx.navigateTree("entry-id-456", {
+  summary: {
+    summary: "## Goal\nReturn to the checkpoint with this handback.",
+    details: { source: "my-extension" },
+  },
+  label: "rewind-handback",
+});
 ```
 
 Options:
@@ -1151,6 +1160,7 @@ Options:
 - `customInstructions`: Custom instructions for the summarizer
 - `replaceInstructions`: If true, `customInstructions` replaces the default prompt instead of being appended
 - `label`: Label to attach to the branch summary entry (or target entry if not summarizing)
+- `summary`: Exact branch summary to attach without invoking model summarization. Shape: `{ summary: string; details?: unknown }`
 
 ### ctx.switchSession(sessionPath, options?)
 

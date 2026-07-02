@@ -59,6 +59,7 @@ import type {
 	ToolCallEventResult,
 	ToolResultEvent,
 	ToolResultEventResult,
+	TreeNavigationOptions,
 	UserBashEvent,
 	UserBashEventResult,
 } from "./types.ts";
@@ -168,7 +169,7 @@ export type ForkHandler = (
 
 export type NavigateTreeHandler = (
 	targetId: string,
-	options?: { summarize?: boolean; customInstructions?: string; replaceInstructions?: boolean; label?: string },
+	options?: TreeNavigationOptions,
 ) => Promise<{ cancelled: boolean }>;
 
 export type SwitchSessionHandler = (
