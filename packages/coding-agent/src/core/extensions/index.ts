@@ -155,6 +155,8 @@ export type {
 	ToolRenderResultOptions,
 	ToolResultEvent,
 	ToolResultEventResult,
+	TreeNavigationOptions,
+	TreeNavigationSummary,
 	TreePreparation,
 	TurnEndEvent,
 	TurnStartEvent,

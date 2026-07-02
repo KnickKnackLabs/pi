@@ -101,7 +101,13 @@ interface AgentSession {
   isStreaming: boolean;
 
   // In-place tree navigation within the current session file
-  navigateTree(targetId: string, options?: { summarize?: boolean; customInstructions?: string; replaceInstructions?: boolean; label?: string }): Promise<{ editorText?: string; cancelled: boolean }>;
+  navigateTree(targetId: string, options?: {
+    summarize?: boolean;
+    customInstructions?: string;
+    replaceInstructions?: boolean;
+    label?: string;
+    summary?: { summary: string; details?: unknown };
+  }): Promise<{ editorText?: string; cancelled: boolean }>;
 
   // Compaction
   compact(customInstructions?: string): Promise<CompactionResult>;
