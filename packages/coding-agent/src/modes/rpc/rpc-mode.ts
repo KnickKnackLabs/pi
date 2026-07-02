@@ -331,6 +331,8 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 						customInstructions: options?.customInstructions,
 						replaceInstructions: options?.replaceInstructions,
 						label: options?.label,
+						summary: options?.summary,
+						fromExtension: options?.summary !== undefined,
 					});
 					return { cancelled: result.cancelled };
 				},

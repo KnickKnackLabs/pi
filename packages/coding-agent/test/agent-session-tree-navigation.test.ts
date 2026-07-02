@@ -10,7 +10,44 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { API_KEY, createTestSession, type TestSessionContext } from "./utilities.ts";
+import { API_KEY, buildTestTree, createTestSession, type TestSessionContext } from "./utilities.ts";
+
+describe("AgentSession tree navigation exact summaries", () => {
+	let ctx: TestSessionContext;
+
+	beforeEach(() => {
+		ctx = createTestSession({ inMemory: true });
+	});
+
+	afterEach(() => {
+		ctx.cleanup();
+	});
+
+	it("attaches an exact branch summary without generated summarization", async () => {
+		const { session, sessionManager } = ctx;
+		const ids = buildTestTree(sessionManager, {
+			messages: [
+				{ role: "user", text: "First" },
+				{ role: "assistant", text: "First answer" },
+				{ role: "user", text: "Second" },
+				{ role: "assistant", text: "Second answer" },
+			],
+		});
+		const result = await session.navigateTree(ids.get("First")!, {
+			summary: { summary: "Exact handback", details: { source: "test" } },
+			label: "rewind-anchor",
+		});
+
+		expect(result.cancelled).toBe(false);
+		expect(result.editorText).toBe("First");
+		expect(result.summaryEntry).toBeDefined();
+		expect(result.summaryEntry?.summary).toBe("Exact handback");
+		expect(result.summaryEntry?.details).toEqual({ source: "test" });
+		expect(result.summaryEntry?.fromHook).toBe(false);
+		expect(result.summaryEntry?.parentId).toBeNull();
+		expect(sessionManager.getLabel(result.summaryEntry!.id)).toBe("rewind-anchor");
+	});
+});
 
 describe.skipIf(!API_KEY)("AgentSession tree navigation e2e", () => {
 	let ctx: TestSessionContext;

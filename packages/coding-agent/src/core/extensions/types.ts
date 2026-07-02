@@ -359,10 +359,7 @@ export interface ExtensionCommandContext extends ExtensionContext {
 	): Promise<{ cancelled: boolean }>;
 
 	/** Navigate to a different point in the session tree. */
-	navigateTree(
-		targetId: string,
-		options?: { summarize?: boolean; customInstructions?: string; replaceInstructions?: boolean; label?: string },
-	): Promise<{ cancelled: boolean }>;
+	navigateTree(targetId: string, options?: TreeNavigationOptions): Promise<{ cancelled: boolean }>;
 
 	/** Switch to a different session file. */
 	switchSession(
@@ -607,12 +604,28 @@ export interface SessionShutdownEvent {
 }
 
 /** Preparation data for tree navigation */
+export interface TreeNavigationSummary {
+	summary: string;
+	details?: unknown;
+}
+
+export interface TreeNavigationOptions {
+	summarize?: boolean;
+	customInstructions?: string;
+	replaceInstructions?: boolean;
+	label?: string;
+	/** Exact branch summary to attach without invoking model summarization. */
+	summary?: TreeNavigationSummary;
+}
+
 export interface TreePreparation {
 	targetId: string;
 	oldLeafId: string | null;
 	commonAncestorId: string | null;
 	entriesToSummarize: SessionEntry[];
 	userWantsSummary: boolean;
+	/** Exact branch summary requested by the caller, if any. */
+	summary?: TreeNavigationSummary;
 	/** Custom instructions for summarization */
 	customInstructions?: string;
 	/** If true, customInstructions replaces the default prompt instead of being appended */
@@ -1594,10 +1607,7 @@ export interface ExtensionCommandContextActions {
 		entryId: string,
 		options?: { position?: "before" | "at"; withSession?: (ctx: ReplacedSessionContext) => Promise<void> },
 	) => Promise<{ cancelled: boolean }>;
-	navigateTree: (
-		targetId: string,
-		options?: { summarize?: boolean; customInstructions?: string; replaceInstructions?: boolean; label?: string },
-	) => Promise<{ cancelled: boolean }>;
+	navigateTree: (targetId: string, options?: TreeNavigationOptions) => Promise<{ cancelled: boolean }>;
 	switchSession: (
 		sessionPath: string,
 		options?: { withSession?: (ctx: ReplacedSessionContext) => Promise<void> },
