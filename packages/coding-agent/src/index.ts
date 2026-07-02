@@ -3,7 +3,15 @@
 export { type Args, parseArgs } from "./cli/args.ts";
 
 // Config paths
-export { getAgentDir, getDocsPath, getExamplesPath, getPackageDir, getReadmePath, VERSION } from "./config.ts";
+export {
+	CONFIG_DIR_NAME,
+	getAgentDir,
+	getDocsPath,
+	getExamplesPath,
+	getPackageDir,
+	getReadmePath,
+	VERSION,
+} from "./config.ts";
 export {
 	AgentSession,
 	type AgentSessionConfig,
@@ -69,6 +77,8 @@ export type {
 	ContextUsage,
 	CustomToolCallEvent,
 	EditToolCallEvent,
+	EntryRenderer,
+	EntryRenderOptions,
 	ExecOptions,
 	ExecResult,
 	Extension,
@@ -114,6 +124,7 @@ export type {
 	SessionBeforeSwitchEvent,
 	SessionBeforeTreeEvent,
 	SessionCompactEvent,
+	SessionInfoChangedEvent,
 	SessionShutdownEvent,
 	SessionStartEvent,
 	SessionTreeEvent,
@@ -156,6 +167,14 @@ export {
 export type { ReadonlyFooterDataProvider } from "./core/footer-data-provider.ts";
 export { convertToLlm } from "./core/messages.ts";
 export { ModelRegistry } from "./core/model-registry.ts";
+export {
+	type ModelScopeDiagnostic,
+	type ResolveCliModelResult,
+	type ResolveModelScopeResult,
+	resolveCliModel,
+	resolveModelScopeWithDiagnostics,
+	type ScopedModel,
+} from "./core/model-resolver.ts";
 export type {
 	PackageManager,
 	PathMetadata,
@@ -197,6 +216,7 @@ export {
 } from "./core/sdk.ts";
 export {
 	type BranchSummaryEntry,
+	buildContextEntries,
 	buildSessionContext,
 	type CompactionEntry,
 	CURRENT_SESSION_VERSION,
@@ -216,6 +236,8 @@ export {
 	type SessionInfoEntry,
 	SessionManager,
 	type SessionMessageEntry,
+	type SessionTreeNode,
+	sessionEntryToContextMessages,
 	type ThinkingLevelChangeEntry,
 } from "./core/session-manager.ts";
 export {
@@ -238,6 +260,7 @@ export {
 	type SkillFrontmatter,
 } from "./core/skills.ts";
 export { createSyntheticSourceInfo } from "./core/source-info.ts";
+export { type EditDiffResult, generateDiffString, generateUnifiedPatch } from "./core/tools/edit-diff.ts";
 // Tools
 export {
 	type BashOperations,

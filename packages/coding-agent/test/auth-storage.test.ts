@@ -5,7 +5,8 @@ import { registerOAuthProvider } from "@earendil-works/pi-ai/oauth";
 import lockfile from "proper-lockfile";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
-import { clearConfigValueCache } from "../src/core/resolve-config-value.ts";
+import { clearConfigValueCache, resolveConfigValueUncached } from "../src/core/resolve-config-value.ts";
+import * as shellModule from "../src/utils/shell.ts";
 
 describe("AuthStorage", () => {
 	let tempDir: string;
@@ -321,6 +322,30 @@ describe("AuthStorage", () => {
 			expect(apiKey).toBe("hello-world");
 		});
 
+		test("command config uses stdin when configured shell requires it", () => {
+			if (process.platform === "win32") return;
+			const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+			vi.spyOn(shellModule, "getShellConfig").mockReturnValue({
+				shell: "/bin/bash",
+				args: ["-s"],
+				commandTransport: "stdin",
+			});
+
+			try {
+				Object.defineProperty(process, "platform", {
+					configurable: true,
+					value: "win32",
+				});
+				const nameExpansion = "$" + "{name}";
+
+				expect(resolveConfigValueUncached(`!name='World'; echo "Hello, ${nameExpansion}!"`)).toBe("Hello, World!");
+			} finally {
+				if (platformDescriptor) {
+					Object.defineProperty(process, "platform", platformDescriptor);
+				}
+			}
+		});
+
 		describe("caching", () => {
 			test("command is only executed once per process", async () => {
 				// Use a command that writes to a file to count invocations
@@ -556,7 +581,7 @@ describe("AuthStorage", () => {
 			expect(updated.google.key).toBe("google-key");
 		});
 
-		test("does not overwrite malformed auth file after load error", () => {
+		test("throws and does not overwrite malformed auth file after load error", () => {
 			writeAuthJson({
 				anthropic: { type: "api_key", key: "anthropic-key" },
 			});
@@ -565,10 +590,40 @@ describe("AuthStorage", () => {
 			writeFileSync(authJsonPath, "{invalid-json", "utf-8");
 
 			authStorage.reload();
-			authStorage.set("openai", { type: "api_key", key: "openai-key" });
+			expect(() => authStorage.set("openai", { type: "api_key", key: "openai-key" })).toThrow(
+				"Cannot update auth storage because it could not be loaded",
+			);
 
 			const raw = readFileSync(authJsonPath, "utf-8");
 			expect(raw).toBe("{invalid-json");
+			expect(authStorage.has("openai")).toBe(false);
+		});
+
+		test("throws when a stale auth lock prevents persistence", () => {
+			writeAuthJson({});
+			writeFileSync(`${authJsonPath}.lock`, "", "utf-8");
+
+			authStorage = AuthStorage.create(authJsonPath);
+			expect(() => authStorage.set("github-copilot", { type: "api_key", key: "copilot-key" })).toThrow(
+				"Cannot update auth storage because it could not be loaded",
+			);
+
+			expect(readFileSync(authJsonPath, "utf-8")).toBe("{}");
+			expect(authStorage.has("github-copilot")).toBe(false);
+		});
+
+		test("recovers from an earlier load error before persisting", () => {
+			writeAuthJson({});
+			const lockPath = `${authJsonPath}.lock`;
+			writeFileSync(lockPath, "", "utf-8");
+
+			authStorage = AuthStorage.create(authJsonPath);
+			rmSync(lockPath);
+			authStorage.set("github-copilot", { type: "api_key", key: "copilot-key" });
+
+			const updated = JSON.parse(readFileSync(authJsonPath, "utf-8")) as Record<string, { key: string }>;
+			expect(updated["github-copilot"].key).toBe("copilot-key");
+			expect(authStorage.has("github-copilot")).toBe(true);
 		});
 
 		test("reload records parse errors and drainErrors clears buffer", () => {
