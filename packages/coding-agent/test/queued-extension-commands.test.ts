@@ -56,6 +56,60 @@ function isUserMessageEntry(entry: SessionEntry): entry is UserMessageEntry {
 	return entry.type === "message" && entry.message.role === "user";
 }
 
+async function createSession(
+	tempDir: string,
+	content: AssistantMessage["content"],
+	extensionsResult: Awaited<ReturnType<typeof createTestExtensionsResult>>,
+): Promise<{ session: AgentSession; sessionManager: SessionManager }> {
+	let streamCall = 0;
+	const model = getModel("anthropic", "claude-sonnet-4-5")!;
+	const agent = new Agent({
+		streamFn: () => {
+			streamCall += 1;
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				if (streamCall === 1) {
+					stream.push({
+						type: "done",
+						reason: "toolUse",
+						message: assistantMessage(content, "toolUse"),
+					});
+					return;
+				}
+				stream.push({
+					type: "done",
+					reason: "stop",
+					message: assistantMessage([{ type: "text", text: "final" }], "stop"),
+				});
+			});
+			return stream;
+		},
+		initialState: {
+			model,
+			systemPrompt: "test",
+			tools: [],
+		},
+	});
+
+	const sessionManager = SessionManager.create(tempDir);
+	const settingsManager = SettingsManager.create(tempDir, tempDir);
+	const authStorage = AuthStorage.inMemory();
+	authStorage.setRuntimeApiKey(model.provider, "test-key");
+	const modelRegistry = ModelRegistry.inMemory(authStorage);
+	const resourceLoader = createTestResourceLoader({ extensionsResult });
+
+	const session = new AgentSession({
+		agent,
+		sessionManager,
+		settingsManager,
+		cwd: tempDir,
+		modelRegistry,
+		resourceLoader,
+	});
+	session.subscribe(() => {});
+	return { session, sessionManager };
+}
+
 describe("queued extension commands", () => {
 	let session: AgentSession | undefined;
 	let tempDir: string | undefined;
@@ -69,10 +123,14 @@ describe("queued extension commands", () => {
 		}
 	});
 
-	it("lets tools queue real extension commands after the current turn", async () => {
-		tempDir = join(tmpdir(), `pi-queued-command-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-		mkdirSync(tempDir, { recursive: true });
+	function makeTempDir(): string {
+		const dir = join(tmpdir(), `pi-queued-command-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(dir, { recursive: true });
+		tempDir = dir;
+		return dir;
+	}
 
+	it("lets tools queue real extension commands after the current turn", async () => {
 		let queuedCommandRan = false;
 		let queuedCommandArgs: string | undefined;
 		let commandSawIdle: boolean | undefined;
@@ -103,62 +161,19 @@ describe("queued extension commands", () => {
 			},
 		]);
 
-		let streamCall = 0;
-		const model = getModel("anthropic", "claude-sonnet-4-5")!;
-		const agent = new Agent({
-			streamFn: () => {
-				streamCall += 1;
-				const stream = new MockAssistantStream();
-				queueMicrotask(() => {
-					if (streamCall === 1) {
-						stream.push({
-							type: "done",
-							reason: "toolUse",
-							message: assistantMessage(
-								[
-									{
-										type: "toolCall",
-										id: "tool-call-1",
-										name: "queue_command_test",
-										arguments: {},
-									},
-								],
-								"toolUse",
-							),
-						});
-						return;
-					}
-					stream.push({
-						type: "done",
-						reason: "stop",
-						message: assistantMessage([{ type: "text", text: "final" }], "stop"),
-					});
-				});
-				return stream;
-			},
-			initialState: {
-				model,
-				systemPrompt: "test",
-				tools: [],
-			},
-		});
-
-		const sessionManager = SessionManager.create(tempDir);
-		const settingsManager = SettingsManager.create(tempDir, tempDir);
-		const authStorage = AuthStorage.inMemory();
-		authStorage.setRuntimeApiKey(model.provider, "test-key");
-		const modelRegistry = ModelRegistry.inMemory(authStorage);
-		const resourceLoader = createTestResourceLoader({ extensionsResult });
-
-		session = new AgentSession({
-			agent,
-			sessionManager,
-			settingsManager,
-			cwd: tempDir,
-			modelRegistry,
-			resourceLoader,
-		});
-		session.subscribe(() => {});
+		const result = await createSession(
+			makeTempDir(),
+			[
+				{
+					type: "toolCall",
+					id: "tool-call-1",
+					name: "queue_command_test",
+					arguments: {},
+				},
+			],
+			extensionsResult,
+		);
+		session = result.session;
 
 		await session.prompt("start");
 
@@ -167,7 +182,7 @@ describe("queued extension commands", () => {
 		expect(commandSawIdle).toBe(true);
 		expect(session.pendingMessageCount).toBe(0);
 
-		const userMessages = sessionManager
+		const userMessages = result.sessionManager
 			.getEntries()
 			.filter(isUserMessageEntry)
 			.map((entry) =>
@@ -176,5 +191,181 @@ describe("queued extension commands", () => {
 					: entry.message.content.map((part) => (part.type === "text" ? part.text : "")).join(""),
 			);
 		expect(userMessages).toEqual(["start"]);
+	});
+
+	it("runs multiple non-terminal queued extension commands in FIFO order", async () => {
+		const commandsRun: string[] = [];
+		const extensionsResult = await createTestExtensionsResult([
+			(pi) => {
+				pi.registerTool({
+					name: "queue_two_commands_test",
+					label: "Queue Two Commands Test",
+					description: "Queue two non-terminal extension commands after the turn.",
+					parameters: Type.Object({}),
+					execute: async (_toolCallId, _params, _signal, _onUpdate, ctx) => {
+						ctx.queueCommand("record-command-one", "first");
+						ctx.queueCommand("record-command-two", "second");
+						return {
+							content: [{ type: "text", text: "queued two commands" }],
+							details: {},
+						};
+					},
+				});
+				pi.registerCommand("record-command-one", {
+					description: "Record first queued command.",
+					handler: async (args) => {
+						commandsRun.push(`one:${args}`);
+					},
+				});
+				pi.registerCommand("record-command-two", {
+					description: "Record second queued command.",
+					handler: async (args) => {
+						commandsRun.push(`two:${args}`);
+					},
+				});
+			},
+		]);
+
+		const result = await createSession(
+			makeTempDir(),
+			[
+				{
+					type: "toolCall",
+					id: "tool-call-1",
+					name: "queue_two_commands_test",
+					arguments: {},
+				},
+			],
+			extensionsResult,
+		);
+		session = result.session;
+
+		await session.prompt("start");
+
+		expect(commandsRun).toEqual(["one:first", "two:second"]);
+		expect(session.pendingMessageCount).toBe(0);
+	});
+
+	it("rejects queue attempts after a terminal queued extension command", async () => {
+		let terminalRan = false;
+		let laterRan = false;
+		let rejectionMessage: string | undefined;
+		const extensionsResult = await createTestExtensionsResult([
+			(pi) => {
+				pi.registerTool({
+					name: "queue_terminal_command_test",
+					label: "Queue Terminal Command Test",
+					description: "Queue a terminal command and then try to queue another command.",
+					parameters: Type.Object({}),
+					execute: async (_toolCallId, _params, _signal, _onUpdate, ctx) => {
+						ctx.queueCommand("terminal-command", "nav", { terminal: true });
+						try {
+							ctx.queueCommand("later-command", "stale");
+						} catch (error) {
+							rejectionMessage = error instanceof Error ? error.message : String(error);
+						}
+						return {
+							content: [{ type: "text", text: "queued terminal command" }],
+							details: {},
+						};
+					},
+				});
+				pi.registerCommand("terminal-command", {
+					description: "Mark that a terminal queued command ran.",
+					handler: async () => {
+						terminalRan = true;
+					},
+				});
+				pi.registerCommand("later-command", {
+					description: "Mark that a later queued command ran.",
+					handler: async () => {
+						laterRan = true;
+					},
+				});
+			},
+		]);
+
+		const result = await createSession(
+			makeTempDir(),
+			[
+				{
+					type: "toolCall",
+					id: "tool-call-1",
+					name: "queue_terminal_command_test",
+					arguments: {},
+				},
+			],
+			extensionsResult,
+		);
+		session = result.session;
+
+		await session.prompt("start");
+
+		expect(terminalRan).toBe(true);
+		expect(laterRan).toBe(false);
+		expect(rejectionMessage).toContain(
+			'Cannot queue extension command "later-command" after terminal queued command "terminal-command"',
+		);
+		expect(session.pendingMessageCount).toBe(0);
+	});
+
+	it("rejects commands queued while a terminal queued extension command is running", async () => {
+		let rejectionMessage: string | undefined;
+		let laterRan = false;
+		const extensionsResult = await createTestExtensionsResult([
+			(pi) => {
+				pi.registerTool({
+					name: "queue_terminal_handler_test",
+					label: "Queue Terminal Handler Test",
+					description: "Queue a terminal command whose handler tries to queue another command.",
+					parameters: Type.Object({}),
+					execute: async (_toolCallId, _params, _signal, _onUpdate, ctx) => {
+						ctx.queueCommand("terminal-queues-again", "nav", { terminal: true });
+						return {
+							content: [{ type: "text", text: "queued terminal handler" }],
+							details: {},
+						};
+					},
+				});
+				pi.registerCommand("terminal-queues-again", {
+					description: "Try to queue another command while terminal command is running.",
+					handler: async (_args, ctx) => {
+						try {
+							ctx.queueCommand("later-command", "stale");
+						} catch (error) {
+							rejectionMessage = error instanceof Error ? error.message : String(error);
+						}
+					},
+				});
+				pi.registerCommand("later-command", {
+					description: "Mark that a later queued command ran.",
+					handler: async () => {
+						laterRan = true;
+					},
+				});
+			},
+		]);
+
+		const result = await createSession(
+			makeTempDir(),
+			[
+				{
+					type: "toolCall",
+					id: "tool-call-1",
+					name: "queue_terminal_handler_test",
+					arguments: {},
+				},
+			],
+			extensionsResult,
+		);
+		session = result.session;
+
+		await session.prompt("start");
+
+		expect(laterRan).toBe(false);
+		expect(rejectionMessage).toContain(
+			'Cannot queue extension command "later-command" while terminal queued command "terminal-queues-again" is running',
+		);
+		expect(session.pendingMessageCount).toBe(0);
 	});
 });

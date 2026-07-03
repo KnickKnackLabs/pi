@@ -302,6 +302,12 @@ export type ExtensionMode = "tui" | "rpc" | "json" | "print";
 export interface QueueCommandOptions {
 	/** When to run the command. Defaults to after the current agent turn. */
 	when?: "afterTurn";
+	/**
+	 * Whether this command can invalidate later queued commands by replacing session state,
+	 * navigating the tree, reloading extensions, or otherwise changing the active runtime.
+	 * Once a terminal command is queued, later queueCommand() calls fail immediately.
+	 */
+	terminal?: boolean;
 }
 
 export interface ExtensionContext {

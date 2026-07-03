@@ -1034,6 +1034,10 @@ Queue an extension command to run with `ExtensionCommandContext` capabilities af
 This is the supported bridge from tools/events to command-only session-control APIs such as `ctx.navigateTree()`, `ctx.fork()`, `ctx.switchSession()`, and `ctx.reload()`.
 Queued commands are not added to the conversation as user messages and do not pass through the model.
 
+Commands that may replace session state, navigate the tree, fork, switch sessions, reload extensions, or otherwise invalidate later queued work should pass `{ terminal: true }`.
+Once a terminal command is queued, later `ctx.queueCommand()` calls fail immediately instead of silently queueing stale work.
+Non-terminal queued commands can still batch and run FIFO.
+
 ```typescript
 pi.registerCommand("apply-navigation", {
   description: "Apply queued navigation",
@@ -1048,13 +1052,14 @@ pi.registerTool({
   description: "Queue navigation after this turn",
   parameters: Type.Object({ targetId: Type.String() }),
   async execute(_id, params, _signal, _onUpdate, ctx) {
-    ctx.queueCommand("apply-navigation", params.targetId);
+    ctx.queueCommand("apply-navigation", params.targetId, { terminal: true });
     return { content: [{ type: "text", text: "Queued navigation." }] };
   },
 });
 ```
 
 Queued commands run after `agent_end`; if any queued commands run, Pi stops the old post-run continuation loop so automatic retry, compaction, or follow-up messages do not continue against stale session state.
+If a terminal queued command runs, Pi stops draining the queued command batch after that command as a defensive backstop.
 
 ### ctx.getSystemPrompt()
 
@@ -1323,7 +1328,7 @@ export default function (pi: ExtensionAPI) {
     description: "Reload extensions, skills, prompts, and themes",
     parameters: Type.Object({}),
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
-      ctx.queueCommand("reload-runtime");
+      ctx.queueCommand("reload-runtime", "", { terminal: true });
       return {
         content: [{ type: "text", text: "Queued reload-runtime after this turn." }],
       };

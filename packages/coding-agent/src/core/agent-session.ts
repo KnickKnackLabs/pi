@@ -261,6 +261,12 @@ type AgentSessionNavigateTreeOptions = TreeNavigationOptions & {
 	fromExtension?: boolean;
 };
 
+interface QueuedExtensionCommand {
+	command: string;
+	args: string;
+	terminal: boolean;
+}
+
 // ============================================================================
 // Constants
 // ============================================================================
@@ -309,7 +315,8 @@ export class AgentSession {
 	// Extension system
 	private _extensionRunner!: ExtensionRunner;
 	private _turnIndex = 0;
-	private _queuedExtensionCommands: Array<{ command: string; args: string }> = [];
+	private _queuedExtensionCommands: QueuedExtensionCommand[] = [];
+	private _drainingTerminalQueuedExtensionCommand: string | undefined = undefined;
 
 	private _resourceLoader: ResourceLoader;
 	private _customTools: ToolDefinition[];
@@ -1199,7 +1206,20 @@ export class AgentSession {
 		if (!normalizedCommand) {
 			throw new Error("Queued command name must not be empty");
 		}
-		this._queuedExtensionCommands.push({ command: normalizedCommand, args });
+
+		const existingTerminalCommand = this._queuedExtensionCommands.find((item) => item.terminal)?.command;
+		if (existingTerminalCommand) {
+			throw new Error(
+				`Cannot queue extension command "${normalizedCommand}" after terminal queued command "${existingTerminalCommand}"`,
+			);
+		}
+		if (this._drainingTerminalQueuedExtensionCommand) {
+			throw new Error(
+				`Cannot queue extension command "${normalizedCommand}" while terminal queued command "${this._drainingTerminalQueuedExtensionCommand}" is running`,
+			);
+		}
+
+		this._queuedExtensionCommands.push({ command: normalizedCommand, args, terminal: options?.terminal === true });
 		this._emitQueueUpdate();
 	}
 
@@ -1231,14 +1251,30 @@ export class AgentSession {
 
 		const queued = this._queuedExtensionCommands.splice(0);
 		this._emitQueueUpdate();
-		for (const item of queued) {
-			const handled = await this._executeExtensionCommand(item.command, item.args, "queued_command");
-			if (!handled) {
-				this._extensionRunner.emitError({
-					extensionPath: `command:${item.command}`,
-					event: "queued_command",
-					error: `Unknown queued extension command: ${item.command}`,
-				});
+		for (const [index, item] of queued.entries()) {
+			this._drainingTerminalQueuedExtensionCommand = item.terminal ? item.command : undefined;
+			try {
+				const handled = await this._executeExtensionCommand(item.command, item.args, "queued_command");
+				if (!handled) {
+					this._extensionRunner.emitError({
+						extensionPath: `command:${item.command}`,
+						event: "queued_command",
+						error: `Unknown queued extension command: ${item.command}`,
+					});
+				}
+			} finally {
+				this._drainingTerminalQueuedExtensionCommand = undefined;
+			}
+
+			if (item.terminal) {
+				for (const skipped of queued.slice(index + 1)) {
+					this._extensionRunner.emitError({
+						extensionPath: `command:${skipped.command}`,
+						event: "queued_command",
+						error: `Skipped queued extension command after terminal command: ${skipped.command}`,
+					});
+				}
+				break;
 			}
 		}
 		return true;
