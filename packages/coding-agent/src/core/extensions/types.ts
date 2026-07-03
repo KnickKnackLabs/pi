@@ -299,6 +299,17 @@ export interface CompactOptions {
  */
 export type ExtensionMode = "tui" | "rpc" | "json" | "print";
 
+export interface QueueCommandOptions {
+	/** When to run the command. Defaults to after the current agent turn. */
+	when?: "afterTurn";
+	/**
+	 * Whether this command can invalidate later queued commands by replacing session state,
+	 * navigating the tree, reloading extensions, or otherwise changing the active runtime.
+	 * Once a terminal command is queued, later queueCommand() calls fail immediately.
+	 */
+	terminal?: boolean;
+}
+
 export interface ExtensionContext {
 	/** UI methods for user interaction */
 	ui: ExtensionUIContext;
@@ -330,6 +341,8 @@ export interface ExtensionContext {
 	getContextUsage(): ContextUsage | undefined;
 	/** Trigger compaction without awaiting completion. */
 	compact(options?: CompactOptions): void;
+	/** Queue an extension command to run with command-context capabilities after the current agent turn. */
+	queueCommand(command: string, args?: string, options?: QueueCommandOptions): void;
 	/** Get the current effective system prompt. */
 	getSystemPrompt(): string;
 }
@@ -1588,6 +1601,7 @@ export interface ExtensionContextActions {
 	shutdown: () => void;
 	getContextUsage: () => ContextUsage | undefined;
 	compact: (options?: CompactOptions) => void;
+	queueCommand: (command: string, args?: string, options?: QueueCommandOptions) => void;
 	getSystemPrompt: () => string;
 	getSystemPromptOptions?: () => BuildSystemPromptOptions;
 }

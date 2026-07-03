@@ -66,6 +66,7 @@ import {
 	type MessageEndEvent,
 	type MessageStartEvent,
 	type MessageUpdateEvent,
+	type QueueCommandOptions,
 	type ReplacedSessionContext,
 	type SessionBeforeCompactResult,
 	type SessionBeforeTreeResult,
@@ -260,6 +261,12 @@ type AgentSessionNavigateTreeOptions = TreeNavigationOptions & {
 	fromExtension?: boolean;
 };
 
+interface QueuedExtensionCommand {
+	command: string;
+	args: string;
+	terminal: boolean;
+}
+
 // ============================================================================
 // Constants
 // ============================================================================
@@ -308,6 +315,8 @@ export class AgentSession {
 	// Extension system
 	private _extensionRunner!: ExtensionRunner;
 	private _turnIndex = 0;
+	private _queuedExtensionCommands: QueuedExtensionCommand[] = [];
+	private _drainingTerminalQueuedExtensionCommand: string | undefined = undefined;
 
 	private _resourceLoader: ResourceLoader;
 	private _customTools: ToolDefinition[];
@@ -981,7 +990,13 @@ export class AgentSession {
 	private async _runAgentPrompt(messages: AgentMessage | AgentMessage[]): Promise<void> {
 		try {
 			await this.agent.prompt(messages);
-			while (await this._handlePostAgentRun()) {
+			while (true) {
+				if (await this._drainQueuedExtensionCommands()) {
+					break;
+				}
+				if (!(await this._handlePostAgentRun())) {
+					break;
+				}
 				await this.agent.continue();
 			}
 		} finally {
@@ -1178,15 +1193,37 @@ export class AgentSession {
 		await this._runAgentPrompt(messages);
 	}
 
-	/**
-	 * Try to execute an extension command. Returns true if command was found and executed.
-	 */
-	private async _tryExecuteExtensionCommand(text: string): Promise<boolean> {
-		// Parse command name and args
-		const spaceIndex = text.indexOf(" ");
-		const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
-		const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1);
+	queueCommand(command: string, args = "", options?: QueueCommandOptions): void {
+		this._queueExtensionCommand(command, args, options);
+	}
 
+	private _queueExtensionCommand(command: string, args = "", options?: QueueCommandOptions): void {
+		const when = options?.when ?? "afterTurn";
+		if (when !== "afterTurn") {
+			throw new Error(`Unsupported queued command timing: ${when}`);
+		}
+		const normalizedCommand = command.trim().replace(/^\/+/, "");
+		if (!normalizedCommand) {
+			throw new Error("Queued command name must not be empty");
+		}
+
+		const existingTerminalCommand = this._queuedExtensionCommands.find((item) => item.terminal)?.command;
+		if (existingTerminalCommand) {
+			throw new Error(
+				`Cannot queue extension command "${normalizedCommand}" after terminal queued command "${existingTerminalCommand}"`,
+			);
+		}
+		if (this._drainingTerminalQueuedExtensionCommand) {
+			throw new Error(
+				`Cannot queue extension command "${normalizedCommand}" while terminal queued command "${this._drainingTerminalQueuedExtensionCommand}" is running`,
+			);
+		}
+
+		this._queuedExtensionCommands.push({ command: normalizedCommand, args, terminal: options?.terminal === true });
+		this._emitQueueUpdate();
+	}
+
+	private async _executeExtensionCommand(commandName: string, args: string, eventName = "command"): Promise<boolean> {
 		const command = this._extensionRunner.getCommand(commandName);
 		if (!command) return false;
 
@@ -1200,11 +1237,59 @@ export class AgentSession {
 			// Emit error via extension runner
 			this._extensionRunner.emitError({
 				extensionPath: `command:${commandName}`,
-				event: "command",
+				event: eventName,
 				error: err instanceof Error ? err.message : String(err),
 			});
 			return true;
 		}
+	}
+
+	private async _drainQueuedExtensionCommands(): Promise<boolean> {
+		if (this._queuedExtensionCommands.length === 0) {
+			return false;
+		}
+
+		const queued = this._queuedExtensionCommands.splice(0);
+		this._emitQueueUpdate();
+		for (const [index, item] of queued.entries()) {
+			this._drainingTerminalQueuedExtensionCommand = item.terminal ? item.command : undefined;
+			try {
+				const handled = await this._executeExtensionCommand(item.command, item.args, "queued_command");
+				if (!handled) {
+					this._extensionRunner.emitError({
+						extensionPath: `command:${item.command}`,
+						event: "queued_command",
+						error: `Unknown queued extension command: ${item.command}`,
+					});
+				}
+			} finally {
+				this._drainingTerminalQueuedExtensionCommand = undefined;
+			}
+
+			if (item.terminal) {
+				for (const skipped of queued.slice(index + 1)) {
+					this._extensionRunner.emitError({
+						extensionPath: `command:${skipped.command}`,
+						event: "queued_command",
+						error: `Skipped queued extension command after terminal command: ${skipped.command}`,
+					});
+				}
+				break;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Try to execute an extension command. Returns true if command was found and executed.
+	 */
+	private async _tryExecuteExtensionCommand(text: string): Promise<boolean> {
+		// Parse command name and args
+		const spaceIndex = text.indexOf(" ");
+		const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
+		const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1);
+
+		return this._executeExtensionCommand(commandName, args);
 	}
 
 	/**
@@ -1425,14 +1510,15 @@ export class AgentSession {
 		const followUp = [...this._followUpMessages];
 		this._steeringMessages = [];
 		this._followUpMessages = [];
+		this._queuedExtensionCommands = [];
 		this.agent.clearAllQueues();
 		this._emitQueueUpdate();
 		return { steering, followUp };
 	}
 
-	/** Number of pending messages (includes both steering and follow-up) */
+	/** Number of pending messages/actions (includes steering, follow-up, and queued extension commands) */
 	get pendingMessageCount(): number {
-		return this._steeringMessages.length + this._followUpMessages.length;
+		return this._steeringMessages.length + this._followUpMessages.length + this._queuedExtensionCommands.length;
 	}
 
 	/** Get pending steering messages (read-only) */
@@ -2327,6 +2413,9 @@ export class AgentSession {
 							options?.onError?.(err);
 						}
 					})();
+				},
+				queueCommand: (command, args, options) => {
+					this.queueCommand(command, args, options);
 				},
 				getSystemPrompt: () => this.systemPrompt,
 				getSystemPromptOptions: () => this._baseSystemPromptOptions,

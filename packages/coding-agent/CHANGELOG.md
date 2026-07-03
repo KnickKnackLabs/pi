@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added `ctx.queueCommand()` so extension tools and event handlers can queue real extension commands to run after the current agent turn with command-context capabilities. Commands that can invalidate later queued work can opt into terminal queue semantics.
 - Added exact branch-summary support to `ctx.navigateTree()` so extensions can attach a supplied summary without invoking model summarization.
 - Added public SDK exports for CLI-equivalent model and scoped-model resolution ([#6201](https://github.com/earendil-works/pi/issues/6201)).
 - Added extension entry renderers for persisted display-only session entries that are rendered in interactive mode without being sent to the model context.

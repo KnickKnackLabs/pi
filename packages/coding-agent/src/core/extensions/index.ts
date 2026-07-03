@@ -108,6 +108,7 @@ export type {
 	// Provider Registration
 	ProviderConfig,
 	ProviderModelConfig,
+	QueueCommandOptions,
 	ReadToolCallEvent,
 	ReadToolResultEvent,
 	// Commands
