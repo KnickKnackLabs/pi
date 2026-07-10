@@ -56,6 +56,14 @@ function isUserMessageEntry(entry: SessionEntry): entry is UserMessageEntry {
 	return entry.type === "message" && entry.message.role === "user";
 }
 
+function createDeferred(): { promise: Promise<void>; resolve: () => void } {
+	let resolve: () => void = () => {};
+	const promise = new Promise<void>((res) => {
+		resolve = res;
+	});
+	return { promise, resolve };
+}
+
 async function createSession(
 	tempDir: string,
 	content: AssistantMessage["content"],
@@ -191,6 +199,64 @@ describe("queued extension commands", () => {
 					: entry.message.content.map((part) => (part.type === "text" ? part.text : "")).join(""),
 			);
 		expect(userMessages).toEqual(["start"]);
+	});
+
+	it("keeps the session globally busy while queued commands run", async () => {
+		let commandSawIdle: boolean | undefined;
+		const commandStarted = createDeferred();
+		const releaseCommand = createDeferred();
+
+		const extensionsResult = await createTestExtensionsResult([
+			(pi) => {
+				pi.registerTool({
+					name: "queue_slow_command_test",
+					label: "Queue Slow Command Test",
+					description: "Queue a slow extension command after the turn.",
+					parameters: Type.Object({}),
+					execute: async (_toolCallId, _params, _signal, _onUpdate, ctx) => {
+						ctx.queueCommand("slow-queued-command");
+						return {
+							content: [{ type: "text", text: "queued slow command" }],
+							details: {},
+						};
+					},
+				});
+				pi.registerCommand("slow-queued-command", {
+					description: "Wait until released.",
+					handler: async (_args, ctx) => {
+						commandSawIdle = ctx.isIdle();
+						commandStarted.resolve();
+						await releaseCommand.promise;
+					},
+				});
+			},
+		]);
+
+		const result = await createSession(
+			makeTempDir(),
+			[
+				{
+					type: "toolCall",
+					id: "tool-call-1",
+					name: "queue_slow_command_test",
+					arguments: {},
+				},
+			],
+			extensionsResult,
+		);
+		session = result.session;
+
+		const promptPromise = session.prompt("start");
+		await commandStarted.promise;
+
+		expect(commandSawIdle).toBe(true);
+		expect(session.isStreaming).toBe(true);
+		expect(session.isIdle).toBe(false);
+		await expect(session.prompt("racy external prompt")).rejects.toThrow("Agent is already processing");
+
+		releaseCommand.resolve();
+		await promptPromise;
+		expect(session.isIdle).toBe(true);
 	});
 
 	it("runs multiple non-terminal queued extension commands in FIFO order", async () => {
