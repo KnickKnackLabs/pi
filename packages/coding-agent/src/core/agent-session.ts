@@ -1302,31 +1302,37 @@ export class AgentSession {
 
 		const queued = this._queuedExtensionCommands.splice(0);
 		this._emitQueueUpdate();
-		for (const [index, item] of queued.entries()) {
-			this._drainingTerminalQueuedExtensionCommand = item.terminal ? item.command : undefined;
-			try {
-				const handled = await this._executeExtensionCommand(item.command, item.args, "queued_command");
-				if (!handled) {
-					this._extensionRunner.emitError({
-						extensionPath: `command:${item.command}`,
-						event: "queued_command",
-						error: `Unknown queued extension command: ${item.command}`,
-					});
+		const wasAgentRunActive = this._isAgentRunActive;
+		this._isAgentRunActive = false;
+		try {
+			for (const [index, item] of queued.entries()) {
+				this._drainingTerminalQueuedExtensionCommand = item.terminal ? item.command : undefined;
+				try {
+					const handled = await this._executeExtensionCommand(item.command, item.args, "queued_command");
+					if (!handled) {
+						this._extensionRunner.emitError({
+							extensionPath: `command:${item.command}`,
+							event: "queued_command",
+							error: `Unknown queued extension command: ${item.command}`,
+						});
+					}
+				} finally {
+					this._drainingTerminalQueuedExtensionCommand = undefined;
 				}
-			} finally {
-				this._drainingTerminalQueuedExtensionCommand = undefined;
-			}
 
-			if (item.terminal) {
-				for (const skipped of queued.slice(index + 1)) {
-					this._extensionRunner.emitError({
-						extensionPath: `command:${skipped.command}`,
-						event: "queued_command",
-						error: `Skipped queued extension command after terminal command: ${skipped.command}`,
-					});
+				if (item.terminal) {
+					for (const skipped of queued.slice(index + 1)) {
+						this._extensionRunner.emitError({
+							extensionPath: `command:${skipped.command}`,
+							event: "queued_command",
+							error: `Skipped queued extension command after terminal command: ${skipped.command}`,
+						});
+					}
+					break;
 				}
-				break;
 			}
+		} finally {
+			this._isAgentRunActive = wasAgentRunActive;
 		}
 		return true;
 	}
