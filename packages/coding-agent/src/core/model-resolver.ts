@@ -596,10 +596,10 @@ export async function findInitialModel(options: {
 		};
 	}
 
-	// 3. Try saved default from settings
+	// 3. Try saved default from settings if auth is configured.
 	if (defaultProvider && defaultModelId) {
 		const found = modelRegistry.find(defaultProvider, defaultModelId);
-		if (found) {
+		if (found && modelRegistry.hasConfiguredAuth(found)) {
 			model = found;
 			if (defaultThinkingLevel) {
 				thinkingLevel = defaultThinkingLevel;
