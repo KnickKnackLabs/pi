@@ -1274,12 +1274,21 @@ export class AgentSession {
 		this._emitQueueUpdate();
 	}
 
-	private async _executeExtensionCommand(commandName: string, args: string, eventName = "command"): Promise<boolean> {
+	private async _executeExtensionCommand(
+		commandName: string,
+		args: string,
+		eventName = "command",
+		options?: { queued?: boolean },
+	): Promise<boolean> {
 		const command = this._extensionRunner.getCommand(commandName);
 		if (!command) return false;
 
-		// Get command context from extension runner (includes session control methods)
-		const ctx = this._extensionRunner.createCommandContext();
+		// Queued commands run after the model/tool turn, so their command context sees
+		// post-turn idle semantics. Keep AgentSession globally busy until queued
+		// commands finish so external prompts cannot race terminal session commands.
+		const ctx = this._extensionRunner.createCommandContext(
+			options?.queued ? { isIdle: () => true, waitForIdle: async () => {} } : undefined,
+		);
 
 		try {
 			await command.handler(args, ctx);
@@ -1302,37 +1311,33 @@ export class AgentSession {
 
 		const queued = this._queuedExtensionCommands.splice(0);
 		this._emitQueueUpdate();
-		const wasAgentRunActive = this._isAgentRunActive;
-		this._isAgentRunActive = false;
-		try {
-			for (const [index, item] of queued.entries()) {
-				this._drainingTerminalQueuedExtensionCommand = item.terminal ? item.command : undefined;
-				try {
-					const handled = await this._executeExtensionCommand(item.command, item.args, "queued_command");
-					if (!handled) {
-						this._extensionRunner.emitError({
-							extensionPath: `command:${item.command}`,
-							event: "queued_command",
-							error: `Unknown queued extension command: ${item.command}`,
-						});
-					}
-				} finally {
-					this._drainingTerminalQueuedExtensionCommand = undefined;
+		for (const [index, item] of queued.entries()) {
+			this._drainingTerminalQueuedExtensionCommand = item.terminal ? item.command : undefined;
+			try {
+				const handled = await this._executeExtensionCommand(item.command, item.args, "queued_command", {
+					queued: true,
+				});
+				if (!handled) {
+					this._extensionRunner.emitError({
+						extensionPath: `command:${item.command}`,
+						event: "queued_command",
+						error: `Unknown queued extension command: ${item.command}`,
+					});
 				}
-
-				if (item.terminal) {
-					for (const skipped of queued.slice(index + 1)) {
-						this._extensionRunner.emitError({
-							extensionPath: `command:${skipped.command}`,
-							event: "queued_command",
-							error: `Skipped queued extension command after terminal command: ${skipped.command}`,
-						});
-					}
-					break;
-				}
+			} finally {
+				this._drainingTerminalQueuedExtensionCommand = undefined;
 			}
-		} finally {
-			this._isAgentRunActive = wasAgentRunActive;
+
+			if (item.terminal) {
+				for (const skipped of queued.slice(index + 1)) {
+					this._extensionRunner.emitError({
+						extensionPath: `command:${skipped.command}`,
+						event: "queued_command",
+						error: `Skipped queued extension command after terminal command: ${skipped.command}`,
+					});
+				}
+				break;
+			}
 		}
 		return true;
 	}
