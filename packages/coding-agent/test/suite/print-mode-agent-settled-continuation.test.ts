@@ -65,9 +65,9 @@ describe("print mode extension continuation", () => {
 			});
 
 			expect(exitCode).toBe(0);
-			expect(idleStatesAfterSend).toEqual([false]);
 			expect(getUserTexts(harness)).toEqual(["start", "continue from extension"]);
 			expect(getAssistantTexts(harness)).toEqual(["first", "second"]);
+			expect(idleStatesAfterSend).toEqual([false]);
 			if (mode === "text") {
 				expect(printOutput).toEqual(["second\n"]);
 			} else {
