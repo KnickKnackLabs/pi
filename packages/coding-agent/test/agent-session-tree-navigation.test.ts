@@ -15,8 +15,8 @@ import { API_KEY, buildTestTree, createTestSession, type TestSessionContext } fr
 describe("AgentSession tree navigation exact summaries", () => {
 	let ctx: TestSessionContext;
 
-	beforeEach(() => {
-		ctx = createTestSession({ inMemory: true });
+	beforeEach(async () => {
+		ctx = await createTestSession({ inMemory: true });
 	});
 
 	afterEach(() => {
@@ -52,8 +52,8 @@ describe("AgentSession tree navigation exact summaries", () => {
 describe.skipIf(!API_KEY)("AgentSession tree navigation e2e", () => {
 	let ctx: TestSessionContext;
 
-	beforeEach(() => {
-		ctx = createTestSession({
+	beforeEach(async () => {
+		ctx = await createTestSession({
 			systemPrompt: "You are a helpful assistant. Reply with just a few words.",
 			settingsOverrides: { compaction: { keepRecentTokens: 1 } },
 		});
@@ -316,8 +316,8 @@ describe.skipIf(!API_KEY)("AgentSession tree navigation e2e", () => {
 describe.skipIf(!API_KEY)("AgentSession tree navigation - branch scenarios", () => {
 	let ctx: TestSessionContext;
 
-	beforeEach(() => {
-		ctx = createTestSession({
+	beforeEach(async () => {
+		ctx = await createTestSession({
 			systemPrompt: "You are a helpful assistant. Reply with just a few words.",
 		});
 	});
