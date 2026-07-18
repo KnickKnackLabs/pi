@@ -106,7 +106,7 @@ describe("runPrintMode", () => {
 
 		expect(exitCode).toBe(0);
 		expect(session.prompt).toHaveBeenCalledWith("Say done", { images });
-		expect(session.waitForIdle).toHaveBeenCalledOnce();
+		expect(session.waitForIdle).toHaveBeenCalledTimes(2);
 		expect(session.extensionRunner.emit).toHaveBeenCalledTimes(1);
 		expect(session.extensionRunner.emit).toHaveBeenCalledWith({ type: "session_shutdown", reason: "quit" });
 	});
@@ -122,7 +122,7 @@ describe("runPrintMode", () => {
 
 		expect(exitCode).toBe(0);
 		expect(session.prompt).toHaveBeenCalledWith("hello");
-		expect(session.waitForIdle).toHaveBeenCalledOnce();
+		expect(session.waitForIdle).toHaveBeenCalledTimes(2);
 		expect(session.extensionRunner.emit).toHaveBeenCalledTimes(1);
 		expect(session.extensionRunner.emit).toHaveBeenCalledWith({ type: "session_shutdown", reason: "quit" });
 	});
