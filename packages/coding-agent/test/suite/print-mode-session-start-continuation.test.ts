@@ -34,7 +34,7 @@ describe("print mode session_start continuation", () => {
 		const services = await createAgentSessionServices({
 			cwd: harness.tempDir,
 			agentDir: harness.tempDir,
-			authStorage: harness.authStorage,
+			modelRuntime: harness.modelRuntime,
 			settingsManager: harness.settingsManager,
 		});
 		const runtime = new AgentSessionRuntime(harness.session, services, async () => {
