@@ -119,6 +119,7 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 		}
 
 		await rebindSession();
+		await session.waitForIdle();
 
 		if (initialMessage) {
 			await session.prompt(initialMessage, { images: initialImages });
