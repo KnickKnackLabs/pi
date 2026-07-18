@@ -290,6 +290,7 @@ export class AgentSession {
 	private _unsubscribeAgent?: () => void;
 	private _eventListeners: AgentSessionEventListener[] = [];
 	private _isAgentRunActive = false;
+	private _pendingExtensionMessageActions = 0;
 	private _idleWaitPromise: Promise<void> | undefined;
 	private _resolveIdleWait: (() => void) | undefined;
 
@@ -537,7 +538,7 @@ export class AgentSession {
 	}
 
 	private _resolveIdleWaitIfIdle(): void {
-		if (this._isAgentRunActive || !this._resolveIdleWait) {
+		if (this._isAgentRunActive || this._pendingExtensionMessageActions > 0 || !this._resolveIdleWait) {
 			return;
 		}
 		const resolve = this._resolveIdleWait;
@@ -856,7 +857,7 @@ export class AgentSession {
 
 	/** Whether the session has no active agent run, retry, auto-compaction, or queued continuation. */
 	get isIdle(): boolean {
-		return !this._isAgentRunActive;
+		return !this._isAgentRunActive && this._pendingExtensionMessageActions === 0;
 	}
 
 	/** Current effective system prompt (includes any per-turn extension modifications) */
@@ -2378,6 +2379,28 @@ export class AgentSession {
 		this.agent.state.model = refreshedModel;
 	}
 
+	private _runExtensionMessageAction(
+		runner: ExtensionRunner,
+		event: "send_message" | "send_user_message",
+		action: () => Promise<void>,
+	): void {
+		// Mark the action pending before async input/preflight work can yield,
+		// so finite hosts cannot observe idle and dispose.
+		this._pendingExtensionMessageActions++;
+		void action()
+			.catch((err) => {
+				runner.emitError({
+					extensionPath: "<runtime>",
+					event,
+					error: err instanceof Error ? err.message : String(err),
+				});
+			})
+			.finally(() => {
+				this._pendingExtensionMessageActions--;
+				this._resolveIdleWaitIfIdle();
+			});
+	}
+
 	private _bindExtensionCore(runner: ExtensionRunner): void {
 		const getCommands = (): SlashCommandInfo[] => {
 			const extensionCommands: SlashCommandInfo[] = runner.getRegisteredCommands().map((command) => ({
@@ -2407,22 +2430,12 @@ export class AgentSession {
 		runner.bindCore(
 			{
 				sendMessage: (message, options) => {
-					this.sendCustomMessage(message, options).catch((err) => {
-						runner.emitError({
-							extensionPath: "<runtime>",
-							event: "send_message",
-							error: err instanceof Error ? err.message : String(err),
-						});
-					});
+					this._runExtensionMessageAction(runner, "send_message", () => this.sendCustomMessage(message, options));
 				},
 				sendUserMessage: (content, options) => {
-					this.sendUserMessage(content, options).catch((err) => {
-						runner.emitError({
-							extensionPath: "<runtime>",
-							event: "send_user_message",
-							error: err instanceof Error ? err.message : String(err),
-						});
-					});
+					this._runExtensionMessageAction(runner, "send_user_message", () =>
+						this.sendUserMessage(content, options),
+					);
 				},
 				appendEntry: (customType, data) => {
 					const entryId = this.sessionManager.appendCustomEntry(customType, data);
