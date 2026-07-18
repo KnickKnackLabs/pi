@@ -7,9 +7,9 @@ import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import { AgentSession } from "../src/core/agent-session.ts";
 import { AuthStorage } from "../src/core/auth-storage.ts";
-import { ModelRegistry } from "../src/core/model-registry.ts";
 import { type SessionEntry, SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
+import { createModelRegistry, getModelRuntime } from "./model-runtime-test-utils.ts";
 import { createTestExtensionsResult, createTestResourceLoader } from "./utilities.ts";
 
 class MockAssistantStream extends EventStream<AssistantMessageEvent, AssistantMessage> {
@@ -101,9 +101,10 @@ async function createSession(
 
 	const sessionManager = SessionManager.create(tempDir);
 	const settingsManager = SettingsManager.create(tempDir, tempDir);
-	const authStorage = AuthStorage.inMemory();
-	authStorage.setRuntimeApiKey(model.provider, "test-key");
-	const modelRegistry = ModelRegistry.inMemory(authStorage);
+	const authStorage = AuthStorage.inMemory({
+		[model.provider]: { type: "api_key", key: "test-key" },
+	});
+	const modelRegistry = await createModelRegistry(authStorage);
 	const resourceLoader = createTestResourceLoader({ extensionsResult });
 
 	const session = new AgentSession({
@@ -111,7 +112,7 @@ async function createSession(
 		sessionManager,
 		settingsManager,
 		cwd: tempDir,
-		modelRegistry,
+		modelRuntime: getModelRuntime(modelRegistry),
 		resourceLoader,
 	});
 	session.subscribe(() => {});
