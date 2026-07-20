@@ -1419,6 +1419,44 @@ pi.registerTool({
 });
 ```
 
+### pi.registerTool(name, transform)
+
+Transform the final configured definition of an existing tool instead of reconstructing it. Fields copied from `current` retain the winning tool's execution, schema, renderers, and source ownership; a transform may deliberately wrap or replace individual behavior.
+
+```typescript
+pi.registerTool("read", (current) => ({
+  ...current,
+  async execute(toolCallId, params, signal, onUpdate, ctx) {
+    console.log(`reading ${params.path}`);
+    return current.execute(toolCallId, params, signal, onUpdate, ctx);
+  },
+}));
+```
+
+Built-in names infer their exact parameter, detail, and renderer-state types. For a custom tool, pass an explicit `NamedToolDefinition` type:
+
+```typescript
+import type { NamedToolDefinition, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
+
+const parameters = Type.Object({ value: Type.String() });
+type CustomTool = NamedToolDefinition<
+  "custom_tool",
+  ToolDefinition<typeof parameters, { echoed: string }>
+>;
+
+pi.registerTool<CustomTool>("custom_tool", (current) => ({
+  ...current,
+  description: `Audited: ${current.description}`,
+}));
+```
+
+Transforms are synchronous and remain registered for the extension instance. Pi applies them to the winning built-in, extension, or SDK definition whenever the registry refreshes, including when the base tool is registered or replaced later. Several transforms apply in registration order; later registrations are outer wrappers.
+
+A transform must synchronously return a complete definition with the same name and the same parameter-schema object. If it throws, returns an invalid definition, or violates either identity rule, Pi reports an extension error and disables only that tool rather than silently dropping the wrapper. Return a new definition instead of mutating `current`.
+
+Each renderer layer receives its own persistent `context.state` and `context.lastComponent`. Calling the renderer captured from `current` therefore preserves the inner renderer's state, rich details, images, and partial-result behavior.
+
 ### pi.sendMessage(message, options?)
 
 Inject a custom message into the session. Custom messages participate in LLM context. For durable TUI-only content that should not be sent to the LLM, use [`pi.appendEntry()`](#piappendentrycustomtype-data) with [`pi.registerEntryRenderer()`](#piregisterentryrenderercustomtype-renderer).
@@ -1667,7 +1705,8 @@ const all = pi.getAllTools();
 //   description: "Read file contents...",
 //   parameters: ...,
 //   promptGuidelines: ["Use read to examine files instead of cat or sed."],
-//   sourceInfo: { path: "<builtin:read>", source: "builtin", scope: "temporary", origin: "top-level" }
+//   sourceInfo: { path: "<builtin:read>", source: "builtin", scope: "temporary", origin: "top-level" },
+//   transformedBy: [{ path: "/path/to/audit.ts", source: "local", scope: "project", origin: "top-level" }]
 // }, ...]
 const builtinTools = all.filter((t) => t.sourceInfo.source === "builtin");
 const extensionTools = all.filter((t) => t.sourceInfo.source !== "builtin" && t.sourceInfo.source !== "sdk");
@@ -1675,7 +1714,7 @@ pi.setActiveTools([...new Set([...active, "my_custom_tool"])]); // Keep current 
 pi.setActiveTools(["read", "bash"]); // Switch to read-only
 ```
 
-`pi.getAllTools()` returns `name`, `description`, `parameters`, `promptGuidelines`, and `sourceInfo`.
+`pi.getAllTools()` returns `name`, `description`, `parameters`, `promptGuidelines`, `sourceInfo`, and `transformedBy`. `sourceInfo` identifies the winning base definition; `transformedBy` lists transform sources from inner to outer.
 
 Typical `sourceInfo.source` values:
 - `builtin` for built-in tools
@@ -2050,28 +2089,49 @@ pi.registerTool({
 });
 ```
 
-### Overriding Built-in Tools
+### Transforming Existing Tools
 
-Extensions can override built-in tools (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`) by registering a tool with the same name. Interactive mode displays a warning when this happens.
+Use `pi.registerTool(name, transform)` when you want to add logging, policy, timing, remote routing, or presentation around an existing tool. The transform receives the actual configured winner, so built-in options and behavior owned by other extensions remain intact.
+
+```typescript
+pi.registerTool("read", (current) => ({
+  ...current,
+  async execute(toolCallId, params, signal, onUpdate, ctx) {
+    audit(params.path);
+    return current.execute(toolCallId, params, signal, onUpdate, ctx);
+  },
+}));
+```
 
 ```bash
-# Extension's read tool replaces built-in read
-pi -e ./tool-override.ts
+pi -e ./tool-transform.ts
 ```
+
+See [examples/extensions/tool-transform.ts](../examples/extensions/tool-transform.ts) for a complete audited-read example that delegates to the configured execution and renderers.
+
+### Replacing a Tool Definition
+
+Registering a full definition with an existing name still replaces the winning base definition. Use this only when the extension intentionally owns the complete schema and execution contract, not merely to wrap another tool.
+
+```typescript
+pi.registerTool({
+  name: "read",
+  label: "remote read",
+  description: "Read files from the configured remote workspace",
+  parameters: remoteReadParameters,
+  execute: executeRemoteRead,
+});
+```
+
+Interactive mode warns about built-in replacement. Built-in renderer inheritance is resolved per slot, but prompt metadata and execution are not inherited. A replacement must preserve any result shape its chosen renderers depend on.
+
+Name-based transforms of built-in tools are typed against the built-in contract. A same-name replacement should preserve that parameter and result contract when other extensions may transform it; use a new tool name when the replacement intentionally has an incompatible schema.
 
 Alternatively, use `--no-builtin-tools` to start without any built-in tools while keeping extension tools enabled:
+
 ```bash
-# No built-in tools, only extension tools
 pi --no-builtin-tools -e ./my-extension.ts
 ```
-
-See [examples/extensions/tool-override.ts](../examples/extensions/tool-override.ts) for a complete example that overrides `read` with logging and access control.
-
-**Rendering:** Built-in renderer inheritance is resolved per slot. Execution override and rendering override are independent. If your override omits `renderCall`, the built-in `renderCall` is used. If your override omits `renderResult`, the built-in `renderResult` is used. If your override omits both, the built-in renderer is used automatically (syntax highlighting, diffs, etc.). This lets you wrap built-in tools for logging or access control without reimplementing the UI.
-
-**Prompt metadata:** `promptSnippet` and `promptGuidelines` are not inherited from the built-in tool. If your override should keep those prompt instructions, define them on the override explicitly.
-
-**Your implementation must match the exact result shape**, including the `details` type. The UI and session logic depend on these shapes for rendering and state tracking.
 
 Built-in tool implementations:
 - [read.ts](https://github.com/earendil-works/pi-mono/blob/main/packages/coding-agent/src/core/tools/read.ts) - `ReadToolDetails`
@@ -2913,7 +2973,7 @@ All examples in [examples/extensions/](../examples/extensions/).
 | `dynamic-tools.ts` | Register tools after startup and during commands | `registerTool`, `session_start`, `registerCommand` |
 | `structured-output.ts` | Final structured-output tool with `terminate: true` | `registerTool`, terminating tool results |
 | `truncated-tool.ts` | Output truncation example | `registerTool`, `truncateHead` |
-| `tool-override.ts` | Override built-in read tool | `registerTool` (same name as built-in) |
+| `tool-transform.ts` | Add auditing and access policy around built-in read | `registerTool(name, transform)` |
 | **Commands** |||
 | `pirate.ts` | Modify system prompt per-turn | `registerCommand`, `before_agent_start` |
 | `summarize.ts` | Conversation summary command | `registerCommand`, `ui.custom` |

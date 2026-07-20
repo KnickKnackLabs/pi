@@ -372,6 +372,7 @@ TypeScript modules that extend pi with custom tools, commands, keyboard shortcut
 ```typescript
 export default function (pi: ExtensionAPI) {
   pi.registerTool({ name: "deploy", ... });
+  pi.registerTool("read", (current) => ({ ...current, execute: audit(current.execute) }));
   pi.registerCommand("stats", { ... });
   pi.on("tool_call", async (event, ctx) => { ... });
 }
@@ -380,7 +381,7 @@ export default function (pi: ExtensionAPI) {
 The default export can also be `async`. pi waits for async extension factories before startup continues, which is useful for one-time initialization such as fetching remote model lists before calling `pi.registerProvider()`.
 
 **What's possible:**
-- Custom tools (or replace built-in tools entirely)
+- Custom tools, compositional tool transforms, or complete tool replacement
 - Sub-agents and plan mode
 - Custom compaction and summarization
 - Permission gates and path protection

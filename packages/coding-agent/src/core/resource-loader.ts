@@ -692,6 +692,9 @@ export class DefaultResourceLoader implements ResourceLoader {
 			for (const tool of extension.tools.values()) {
 				tool.sourceInfo = extension.sourceInfo;
 			}
+			for (const transform of extension.toolTransforms ?? []) {
+				transform.sourceInfo = extension.sourceInfo;
+			}
 		}
 	}
 

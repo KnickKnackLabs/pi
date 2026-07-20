@@ -42,6 +42,7 @@ import type {
 	ProviderConfig,
 	RegisteredCommand,
 	ToolDefinition,
+	ToolTransform,
 } from "./types.ts";
 
 /** Modules available to extensions via virtualModules (for compiled Bun binary) */
@@ -196,6 +197,7 @@ export function createExtensionRuntime(): ExtensionRuntime {
 		getThinkingLevel: notInitialized,
 		setThinkingLevel: notInitialized,
 		flagValues: new Map(),
+		nextToolTransformRegistrationOrder: 0,
 		pendingProviderRegistrations: [],
 		pendingNativeProviderRegistrations: [],
 		assertActive,
@@ -243,12 +245,25 @@ function createExtensionAPI(
 			extension.handlers.set(event, list);
 		},
 
-		registerTool(tool: ToolDefinition): void {
+		registerTool(toolOrName: ToolDefinition | string, transform?: ToolTransform): void {
 			runtime.assertActive();
-			extension.tools.set(tool.name, {
-				definition: tool,
-				sourceInfo: extension.sourceInfo,
-			});
+			if (typeof toolOrName === "string") {
+				if (!transform) {
+					throw new Error(`registerTool('${toolOrName}', transform) requires a transform function`);
+				}
+				extension.toolTransforms ??= [];
+				extension.toolTransforms.push({
+					name: toolOrName,
+					transform,
+					sourceInfo: extension.sourceInfo,
+					registrationOrder: runtime.nextToolTransformRegistrationOrder++,
+				});
+			} else {
+				extension.tools.set(toolOrName.name, {
+					definition: toolOrName,
+					sourceInfo: extension.sourceInfo,
+				});
+			}
 			runtime.refreshTools();
 		},
 
@@ -449,6 +464,7 @@ function createExtension(extensionPath: string, resolvedPath: string): Extension
 		sourceInfo: createSyntheticSourceInfo(extensionPath, { source, baseDir }),
 		handlers: new Map(),
 		tools: new Map(),
+		toolTransforms: [],
 		messageRenderers: new Map(),
 		entryRenderers: new Map(),
 		commands: new Map(),

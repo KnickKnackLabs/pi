@@ -34,7 +34,7 @@ cp permission-gate.ts ~/.pi/agent/extensions/
 | `hello.ts` | Minimal custom tool example |
 | `question.ts` | Demonstrates `ctx.ui.select()` for asking the user questions with custom UI |
 | `questionnaire.ts` | Multi-question input with tab bar navigation between questions |
-| `tool-override.ts` | Override built-in tools (e.g., add logging/access control to `read`) |
+| `tool-transform.ts` | Wrap an existing tool while preserving its configured execution and rendering |
 | `dynamic-tools.ts` | Register tools after startup (`session_start`) and at runtime via command, with prompt snippets and tool-specific prompt guidelines |
 | `kimi-deferred-tools.ts` | Search for and progressively activate tools for Kimi's deferred-tool loading protocol |
 | `structured-output.ts` | Final structured-output tool that returns `terminate: true` so the agent can end on the tool call |

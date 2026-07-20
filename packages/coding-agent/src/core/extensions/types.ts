@@ -496,7 +496,52 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 	) => Component;
 }
 
-type AnyToolDefinition = ToolDefinition<any, any, any>;
+/** Type-erased tool definition used by registries that hold heterogeneous tools. */
+export interface AnyToolDefinition {
+	name: string;
+	label: string;
+	description: string;
+	promptSnippet?: string;
+	promptGuidelines?: string[];
+	parameters: TSchema;
+	renderShell?: "default" | "self";
+	prepareArguments?: (args: unknown) => any;
+	executionMode?: ToolExecutionMode;
+	execute(
+		toolCallId: string,
+		params: any,
+		signal: AbortSignal | undefined,
+		onUpdate: AgentToolUpdateCallback<any> | undefined,
+		ctx: ExtensionContext,
+	): Promise<AgentToolResult<any>>;
+	renderCall?: (args: any, theme: Theme, context: ToolRenderContext<any, any>) => Component;
+	renderResult?: (
+		result: AgentToolResult<any>,
+		options: ToolRenderResultOptions,
+		theme: Theme,
+		context: ToolRenderContext<any, any>,
+	) => Component;
+}
+
+export type NamedToolDefinition<TName extends string, TTool extends AnyToolDefinition = AnyToolDefinition> = Omit<
+	TTool,
+	"name"
+> & {
+	name: TName;
+};
+
+export interface BuiltInToolDefinitions {
+	read: NamedToolDefinition<"read", ReturnType<typeof import("../tools/read.ts").createReadToolDefinition>>;
+	bash: NamedToolDefinition<"bash", ReturnType<typeof import("../tools/bash.ts").createBashToolDefinition>>;
+	edit: NamedToolDefinition<"edit", ReturnType<typeof import("../tools/edit.ts").createEditToolDefinition>>;
+	write: NamedToolDefinition<"write", ReturnType<typeof import("../tools/write.ts").createWriteToolDefinition>>;
+	grep: NamedToolDefinition<"grep", ReturnType<typeof import("../tools/grep.ts").createGrepToolDefinition>>;
+	find: NamedToolDefinition<"find", ReturnType<typeof import("../tools/find.ts").createFindToolDefinition>>;
+	ls: NamedToolDefinition<"ls", ReturnType<typeof import("../tools/ls.ts").createLsToolDefinition>>;
+}
+
+/** A synchronous, reusable transformation of an existing tool definition. */
+export type ToolTransform<TTool extends AnyToolDefinition = AnyToolDefinition> = (current: TTool) => TTool;
 
 /**
  * Preserve parameter inference for standalone tool definitions.
@@ -1247,6 +1292,13 @@ export interface ExtensionAPI {
 	registerTool<TParams extends TSchema = TSchema, TDetails = unknown, TState = any>(
 		tool: ToolDefinition<TParams, TDetails, TState>,
 	): void;
+	/** Transform a built-in tool while preserving its exact parameter, detail, and renderer state types. */
+	registerTool<TName extends keyof BuiltInToolDefinitions>(
+		name: TName,
+		transform: ToolTransform<BuiltInToolDefinitions[TName]>,
+	): void;
+	/** Transform a custom tool using an explicitly supplied named tool-definition type. */
+	registerTool<TTool extends AnyToolDefinition>(name: TTool["name"], transform: ToolTransform<TTool>): void;
 
 	// =========================================================================
 	// Command, Shortcut, Flag Registration
@@ -1521,8 +1573,15 @@ export type InlineExtension =
 // ============================================================================
 
 export interface RegisteredTool {
-	definition: ToolDefinition;
+	definition: AnyToolDefinition;
 	sourceInfo: SourceInfo;
+}
+
+export interface RegisteredToolTransform {
+	name: string;
+	transform: ToolTransform;
+	sourceInfo: SourceInfo;
+	registrationOrder: number;
 }
 
 export interface ExtensionFlag {
@@ -1565,6 +1624,8 @@ export type GetActiveToolsHandler = () => string[];
 /** Tool info with name, description, parameter schema, prompt guidelines, and source metadata. */
 export type ToolInfo = Pick<ToolDefinition, "name" | "description" | "parameters" | "promptGuidelines"> & {
 	sourceInfo: SourceInfo;
+	/** Transform sources in application order, from inner to outer. */
+	transformedBy: SourceInfo[];
 };
 
 export type GetAllToolsHandler = () => ToolInfo[];
@@ -1589,6 +1650,8 @@ export type SetLabelHandler = (entryId: string, label: string | undefined) => vo
  */
 export interface ExtensionRuntimeState {
 	flagValues: Map<string, boolean | string>;
+	/** Monotonic order shared by all tool-transform registrations in this extension runtime. */
+	nextToolTransformRegistrationOrder: number;
 	/** Legacy provider-config registrations queued during extension loading, processed when runner binds. */
 	pendingProviderRegistrations: Array<{ name: string; config: ProviderConfig; extensionPath: string }>;
 	/** Native pi-ai provider registrations queued during extension loading, processed when runner binds. */
@@ -1686,6 +1749,7 @@ export interface Extension {
 	sourceInfo: SourceInfo;
 	handlers: Map<string, HandlerFn[]>;
 	tools: Map<string, RegisteredTool>;
+	toolTransforms?: RegisteredToolTransform[];
 	messageRenderers: Map<string, MessageRenderer>;
 	entryRenderers?: Map<string, EntryRenderer>;
 	commands: Map<string, RegisteredCommand>;

@@ -47,6 +47,7 @@ import type {
 	ProviderConfig,
 	RegisteredCommand,
 	RegisteredTool,
+	RegisteredToolTransform,
 	ReplacedSessionContext,
 	ResolvedCommand,
 	ResourcesDiscoverEvent,
@@ -458,6 +459,13 @@ export class ExtensionRunner {
 			}
 		}
 		return Array.from(toolsByName.values());
+	}
+
+	/** Get all tool transforms in their original cross-extension registration order. */
+	getAllRegisteredToolTransforms(): RegisteredToolTransform[] {
+		return this.extensions
+			.flatMap((extension) => extension.toolTransforms ?? [])
+			.sort((a, b) => a.registrationOrder - b.registrationOrder);
 	}
 
 	/** Get a tool definition by name. Returns undefined if not found. */
