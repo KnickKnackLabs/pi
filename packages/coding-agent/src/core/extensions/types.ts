@@ -70,13 +70,7 @@ import type { EditToolDetails } from "../tools/edit.ts";
 import type {
 	BashToolDetails,
 	BashToolInput,
-	createBashToolDefinition,
-	createEditToolDefinition,
-	createFindToolDefinition,
-	createGrepToolDefinition,
-	createLsToolDefinition,
-	createReadToolDefinition,
-	createWriteToolDefinition,
+	BuiltInToolDefinitionRegistry,
 	EditToolInput,
 	FindToolDetails,
 	FindToolInput,
@@ -538,15 +532,9 @@ export type NamedToolDefinition<TName extends string, TTool extends AnyToolDefin
 	name: TName;
 };
 
-export interface BuiltInToolDefinitions {
-	read: NamedToolDefinition<"read", ReturnType<typeof createReadToolDefinition>>;
-	bash: NamedToolDefinition<"bash", ReturnType<typeof createBashToolDefinition>>;
-	edit: NamedToolDefinition<"edit", ReturnType<typeof createEditToolDefinition>>;
-	write: NamedToolDefinition<"write", ReturnType<typeof createWriteToolDefinition>>;
-	grep: NamedToolDefinition<"grep", ReturnType<typeof createGrepToolDefinition>>;
-	find: NamedToolDefinition<"find", ReturnType<typeof createFindToolDefinition>>;
-	ls: NamedToolDefinition<"ls", ReturnType<typeof createLsToolDefinition>>;
-}
+export type BuiltInToolDefinitions = {
+	[TName in keyof BuiltInToolDefinitionRegistry]: NamedToolDefinition<TName, BuiltInToolDefinitionRegistry[TName]>;
+};
 
 /** A synchronous, reusable transformation of an existing tool definition. */
 export type ToolTransform<TTool extends AnyToolDefinition = AnyToolDefinition> = (current: TTool) => TTool;

@@ -1440,7 +1440,9 @@ pi.registerTool("read", (current) => ({
 }));
 ```
 
-Built-in names infer their exact parameter, detail, and renderer-state types. For a custom tool, pass an explicit `NamedToolDefinition` type:
+Transform registration is deliberately name-scoped; there is no all-tools overload. After startup, an extension that wants broader coverage can inspect `pi.getAllTools()`, choose names from tool metadata or configuration, and register one transform per selected name. A tool added later is not transformed until the extension explicitly registers that name.
+
+Built-in names infer their exact parameter, detail, and renderer-state types from the canonical built-in definition registry. This built-in map affects static inference only; it is not a runtime allowlist. For a custom tool, pass an explicit `NamedToolDefinition` type:
 
 ```typescript
 import type { NamedToolDefinition, ToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -2101,7 +2103,7 @@ pi.registerTool({
 
 ### Transforming Existing Tools
 
-Use `pi.registerTool(name, transform)` when you want to add logging, policy, timing, remote routing, or presentation around an existing tool. The transform receives the actual configured winner, so built-in options and behavior owned by other extensions remain intact.
+Use `pi.registerTool(name, transform)` when you want to add logging, policy, timing, remote routing, or presentation around a named existing tool. The transform receives the actual configured winner, so built-in options and behavior owned by other extensions remain intact. Broad policies should discover current tools with `pi.getAllTools()`, select names explicitly, and register each intended transform rather than silently wrapping every tool.
 
 ```typescript
 pi.registerTool("read", (current) => ({
