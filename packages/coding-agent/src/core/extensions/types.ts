@@ -69,6 +69,13 @@ import type { EditToolDetails } from "../tools/edit.ts";
 import type {
 	BashToolDetails,
 	BashToolInput,
+	createBashToolDefinition,
+	createEditToolDefinition,
+	createFindToolDefinition,
+	createGrepToolDefinition,
+	createLsToolDefinition,
+	createReadToolDefinition,
+	createWriteToolDefinition,
 	EditToolInput,
 	FindToolDetails,
 	FindToolInput,
@@ -531,13 +538,13 @@ export type NamedToolDefinition<TName extends string, TTool extends AnyToolDefin
 };
 
 export interface BuiltInToolDefinitions {
-	read: NamedToolDefinition<"read", ReturnType<typeof import("../tools/read.ts").createReadToolDefinition>>;
-	bash: NamedToolDefinition<"bash", ReturnType<typeof import("../tools/bash.ts").createBashToolDefinition>>;
-	edit: NamedToolDefinition<"edit", ReturnType<typeof import("../tools/edit.ts").createEditToolDefinition>>;
-	write: NamedToolDefinition<"write", ReturnType<typeof import("../tools/write.ts").createWriteToolDefinition>>;
-	grep: NamedToolDefinition<"grep", ReturnType<typeof import("../tools/grep.ts").createGrepToolDefinition>>;
-	find: NamedToolDefinition<"find", ReturnType<typeof import("../tools/find.ts").createFindToolDefinition>>;
-	ls: NamedToolDefinition<"ls", ReturnType<typeof import("../tools/ls.ts").createLsToolDefinition>>;
+	read: NamedToolDefinition<"read", ReturnType<typeof createReadToolDefinition>>;
+	bash: NamedToolDefinition<"bash", ReturnType<typeof createBashToolDefinition>>;
+	edit: NamedToolDefinition<"edit", ReturnType<typeof createEditToolDefinition>>;
+	write: NamedToolDefinition<"write", ReturnType<typeof createWriteToolDefinition>>;
+	grep: NamedToolDefinition<"grep", ReturnType<typeof createGrepToolDefinition>>;
+	find: NamedToolDefinition<"find", ReturnType<typeof createFindToolDefinition>>;
+	ls: NamedToolDefinition<"ls", ReturnType<typeof createLsToolDefinition>>;
 }
 
 /** A synchronous, reusable transformation of an existing tool definition. */
