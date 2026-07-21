@@ -153,7 +153,7 @@ export function createReadOnlyToolDefinitions(cwd: string, options?: ToolsOption
 	];
 }
 
-export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): Record<ToolName, ToolDef> {
+export function createAllToolDefinitions(cwd: string, options?: ToolsOptions) {
 	return {
 		read: createReadToolDefinition(cwd, options?.read),
 		bash: createBashToolDefinition(cwd, options?.bash),
@@ -164,6 +164,8 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 		ls: createLsToolDefinition(cwd, options?.ls),
 	};
 }
+
+export type BuiltInToolDefinitionRegistry = ReturnType<typeof createAllToolDefinitions>;
 
 export function createCodingTools(cwd: string, options?: ToolsOptions): Tool[] {
 	return [

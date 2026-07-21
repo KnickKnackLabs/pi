@@ -27,6 +27,7 @@ export type {
 	// Re-exports
 	AgentToolResult,
 	AgentToolUpdateCallback,
+	AnyToolDefinition,
 	AppendEntryHandler,
 	// App keybindings (for custom editors)
 	AppKeybinding,
@@ -40,6 +41,7 @@ export type {
 	BeforeProviderRequestEvent,
 	BeforeProviderRequestEventResult,
 	BuildSystemPromptOptions,
+	BuiltInToolDefinitions,
 	// Context
 	CompactOptions,
 	// Events - Agent
@@ -103,6 +105,7 @@ export type {
 	MessageUpdateEvent,
 	ModelSelectEvent,
 	ModelSelectSource,
+	NamedToolDefinition,
 	ProjectTrustContext,
 	ProjectTrustEvent,
 	ProjectTrustEventDecision,
@@ -159,6 +162,7 @@ export type {
 	ToolRenderResultOptions,
 	ToolResultEvent,
 	ToolResultEventResult,
+	ToolTransform,
 	TreeNavigationOptions,
 	TreeNavigationSummary,
 	TreePreparation,

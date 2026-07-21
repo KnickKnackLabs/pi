@@ -3,9 +3,11 @@ import { Text, type TUI } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { beforeAll, describe, expect, test } from "vitest";
 import { getReadmePath } from "../src/config.ts";
-import type { ToolDefinition } from "../src/core/extensions/types.ts";
+import type { RegisteredToolTransform, ToolDefinition } from "../src/core/extensions/types.ts";
+import { createSyntheticSourceInfo } from "../src/core/source-info.ts";
 import { type BashOperations, createBashToolDefinition } from "../src/core/tools/bash.ts";
 import { createReadTool, createReadToolDefinition } from "../src/core/tools/read.ts";
+import { resolveToolDefinitions } from "../src/core/tools/tool-resolution.ts";
 import { createWriteToolDefinition } from "../src/core/tools/write.ts";
 import { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
@@ -294,6 +296,55 @@ describe("ToolExecutionComponent parity", () => {
 		expect(rendered).toContain("wrapped override result");
 	});
 
+	test("lets transforms delegate to renderer slots inherited by replacement tools", () => {
+		const builtIn = createReadToolDefinition(process.cwd());
+		const replacement: ToolDefinition = {
+			...createBaseToolDefinition("read"),
+			parameters: builtIn.parameters,
+		};
+		const transform: RegisteredToolTransform = {
+			name: "read",
+			registrationOrder: 0,
+			sourceInfo: createSyntheticSourceInfo("<transform:read-renderer>", { source: "test" }),
+			transform(current) {
+				const renderCall = current.renderCall!;
+				return {
+					...current,
+					renderCall(args, currentTheme, context) {
+						const inner = renderCall(args, currentTheme, context);
+						return new Text(`wrapped: ${inner.render(120).join(" ")}`, 0, 0);
+					},
+				};
+			},
+		};
+		const definition = resolveToolDefinitions(
+			[
+				{
+					definition: builtIn,
+					sourceInfo: createSyntheticSourceInfo("<builtin:read>", { source: "builtin" }),
+				},
+				{
+					definition: replacement,
+					sourceInfo: createSyntheticSourceInfo("<extension:read>", { source: "test" }),
+				},
+			],
+			[transform],
+			{ rendererFallbacks: new Map([["read", builtIn]]) },
+		).definitions.get("read")!.definition;
+
+		const component = new ToolExecutionComponent(
+			"read",
+			"tool-inherited-renderer",
+			{ path: "README.md" },
+			{},
+			definition,
+			createFakeTui(),
+			process.cwd(),
+		);
+
+		expect(stripAnsi(component.render(120).join("\n"))).toContain("wrapped:");
+	});
+
 	test("shares renderer state across custom call and result slots", () => {
 		type RenderState = { token?: string };
 		const toolDefinition: ToolDefinition<any, unknown, RenderState> = {
@@ -320,6 +371,110 @@ describe("ToolExecutionComponent parity", () => {
 		const rendered = stripAnsi(component.render(120).join("\n"));
 		expect(rendered).toContain("custom call shared-token");
 		expect(rendered).toContain("custom result shared-token");
+	});
+
+	test("isolates renderer state and last components across composed layers", () => {
+		type RenderObservation = {
+			state: object;
+			lastComponent: unknown;
+			returned: Text;
+		};
+		const baseCalls: RenderObservation[] = [];
+		const baseResults: RenderObservation[] = [];
+		const outerCalls: RenderObservation[] = [];
+		const outerResults: RenderObservation[] = [];
+		const observedDetails: unknown[] = [];
+		const observedContent: unknown[] = [];
+
+		const baseDefinition: ToolDefinition = {
+			...createBaseToolDefinition("layered_tool"),
+			renderCall: (_args, _theme, context) => {
+				const state = context.state as { calls?: number };
+				state.calls = (state.calls ?? 0) + 1;
+				const returned = new Text(`base call ${state.calls}`, 0, 0);
+				baseCalls.push({ state, lastComponent: context.lastComponent, returned });
+				return returned;
+			},
+			renderResult: (result, _options, _theme, context) => {
+				const state = context.state as { results?: number };
+				state.results = (state.results ?? 0) + 1;
+				observedDetails.push(result.details);
+				observedContent.push(result.content);
+				const returned = new Text(`base result ${state.results}`, 0, 0);
+				baseResults.push({ state, lastComponent: context.lastComponent, returned });
+				return returned;
+			},
+		};
+		const transform: RegisteredToolTransform = {
+			name: "layered_tool",
+			registrationOrder: 0,
+			sourceInfo: createSyntheticSourceInfo("<transform:layered>", { source: "test" }),
+			transform(current) {
+				const renderCall = current.renderCall!;
+				const renderResult = current.renderResult!;
+				return {
+					...current,
+					renderCall(args, currentTheme, context) {
+						const inner = renderCall(args, currentTheme, context);
+						const state = context.state as { calls?: number };
+						state.calls = (state.calls ?? 0) + 1;
+						const returned = new Text(`outer call ${state.calls}: ${inner.render(120).join(" ")}`, 0, 0);
+						outerCalls.push({ state, lastComponent: context.lastComponent, returned });
+						return returned;
+					},
+					renderResult(result, options, currentTheme, context) {
+						const inner = renderResult(result, options, currentTheme, context);
+						const state = context.state as { results?: number };
+						state.results = (state.results ?? 0) + 1;
+						const returned = new Text(`outer result ${state.results}: ${inner.render(120).join(" ")}`, 0, 0);
+						outerResults.push({ state, lastComponent: context.lastComponent, returned });
+						return returned;
+					},
+				};
+			},
+		};
+		const definition = resolveToolDefinitions(
+			[
+				{
+					definition: baseDefinition,
+					sourceInfo: createSyntheticSourceInfo("<base:layered>", { source: "test" }),
+				},
+			],
+			[transform],
+		).definitions.get("layered_tool")!.definition;
+		const component = new ToolExecutionComponent(
+			"layered_tool",
+			"tool-layered",
+			{},
+			{},
+			definition,
+			createFakeTui(),
+			process.cwd(),
+		);
+		const details = { truncation: { truncated: true, totalLines: 20 } };
+		const content = [
+			{ type: "text", text: "partial output" },
+			{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+		];
+
+		component.updateResult({ content, details, isError: false }, false);
+		component.setExpanded(true);
+
+		expect(baseCalls.length).toBeGreaterThanOrEqual(2);
+		expect(outerCalls).toHaveLength(baseCalls.length);
+		expect(baseResults).toHaveLength(2);
+		expect(outerResults).toHaveLength(2);
+		expect(new Set(baseCalls.map((item) => item.state)).size).toBe(1);
+		expect(new Set(outerCalls.map((item) => item.state)).size).toBe(1);
+		expect(baseCalls[0].state).toBe(baseResults[0].state);
+		expect(outerCalls[0].state).toBe(outerResults[0].state);
+		expect(baseCalls[0].state).not.toBe(outerCalls[0].state);
+		expect(baseCalls[1].lastComponent).toBe(baseCalls[0].returned);
+		expect(outerCalls[1].lastComponent).toBe(outerCalls[0].returned);
+		expect(baseResults[1].lastComponent).toBe(baseResults[0].returned);
+		expect(outerResults[1].lastComponent).toBe(outerResults[0].returned);
+		expect(observedDetails).toEqual([details, details]);
+		expect(observedContent).toEqual([content, content]);
 	});
 
 	test("exposes args in render result context", () => {

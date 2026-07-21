@@ -6,7 +6,12 @@ import { resolvePath } from "../utils/paths.ts";
 import { AgentSession } from "./agent-session.ts";
 import { formatNoModelsAvailableMessage } from "./auth-guidance.ts";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
-import type { ExtensionRunner, LoadExtensionsResult, SessionStartEvent, ToolDefinition } from "./extensions/index.ts";
+import type {
+	AnyToolDefinition,
+	ExtensionRunner,
+	LoadExtensionsResult,
+	SessionStartEvent,
+} from "./extensions/index.ts";
 import { convertToLlm } from "./messages.ts";
 import { findInitialModel } from "./model-resolver.ts";
 import { ModelRuntime } from "./model-runtime.ts";
@@ -65,7 +70,7 @@ export interface CreateAgentSessionOptions {
 	/** Optional denylist of tool names to disable. Applies after `tools` when both are provided. */
 	excludeTools?: string[];
 	/** Custom tools to register (in addition to built-in tools). */
-	customTools?: ToolDefinition[];
+	customTools?: AnyToolDefinition[];
 
 	/** Resource loader. When omitted, DefaultResourceLoader is used. */
 	resourceLoader?: ResourceLoader;

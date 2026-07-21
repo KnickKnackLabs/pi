@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added compositional `pi.registerTool(name, transform)` registration so extensions can wrap the final configured built-in, extension, or SDK tool without reconstructing it, preserving copied execution, schema, rendering, source ownership, and rich results.
 - Added `ctx.queueCommand()` so extension tools and event handlers can queue real extension commands to run after the current agent turn with command-context capabilities. Commands that can invalidate later queued work can opt into terminal queue semantics.
 - Added exact branch-summary support to `ctx.navigateTree()` so extensions can attach a supplied summary without invoking model summarization.
 
