@@ -8,6 +8,10 @@
 - Added `ctx.queueCommand()` so extension tools and event handlers can queue real extension commands to run after the current agent turn with command-context capabilities. Commands that can invalidate later queued work can opt into terminal queue semantics.
 - Added exact branch-summary support to `ctx.navigateTree()` so extensions can attach a supplied summary without invoking model summarization.
 
+### Fixed
+
+- Fixed startup and reload to reconcile installed pinned git packages to their configured refs instead of loading stale checkouts.
+
 ## [0.81.0] - 2026-07-21
 
 ### New Features
