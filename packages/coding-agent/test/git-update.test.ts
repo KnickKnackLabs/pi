@@ -445,6 +445,9 @@ describe("DefaultPackageManager git update", () => {
 				JSON.stringify({ pi: { extensions: ["./pi-extensions"] } }, null, 2),
 			);
 			writeFileSync(extensionFile, "// pinned");
+			initGitRepo(cachedDir);
+			git(["add", "."], cachedDir);
+			git(["commit", "-m", "Pinned temporary extension"], cachedDir);
 
 			const executedCommands: string[] = [];
 			const managerWithInternals = packageManager as unknown as {

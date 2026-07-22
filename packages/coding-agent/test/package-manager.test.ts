@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { PassThrough } from "node:stream";
@@ -322,7 +322,7 @@ Content`,
 			expect(result.extensions.some((r) => r.path === join(installedPath, "extensions", "index.ts"))).toBe(true);
 		});
 
-		it("should resolve a matching pinned git checkout without fetching", async () => {
+		it("should resolve a matching clean pinned git checkout without fetching", async () => {
 			const source = "git:github.com/example/repo@v2";
 			const installedPath = join(tempDir, ".pi", "git", "github.com", "example", "repo");
 			mkdirSync(join(installedPath, "extensions"), { recursive: true });
@@ -332,14 +332,47 @@ Content`,
 			const managerWithInternals = packageManager as unknown as PackageManagerInternals;
 			const runCommandCaptureSpy = vi
 				.spyOn(managerWithInternals, "runCommandCapture")
-				.mockResolvedValue("matching-head");
+				.mockImplementation(async (_command, args) => (args[0] === "status" ? "" : "matching-head"));
 			const runCommandSpy = vi.spyOn(managerWithInternals, "runCommand").mockResolvedValue(undefined);
 
 			const result = await packageManager.resolve();
 
-			expect(runCommandCaptureSpy).toHaveBeenCalledTimes(2);
+			expect(runCommandCaptureSpy.mock.calls.map((call) => call[1])).toEqual([
+				["rev-parse", "HEAD"],
+				["rev-parse", "v2^{commit}"],
+				["status", "--porcelain=v1", "--untracked-files=normal"],
+			]);
 			expect(runCommandSpy).not.toHaveBeenCalled();
 			expect(result.extensions.some((r) => r.path === join(installedPath, "extensions", "index.ts"))).toBe(true);
+		});
+
+		it("should restore a dirty pinned git checkout before resolving its resources", async () => {
+			const source = "git:github.com/example/repo@v2";
+			const installedPath = join(tempDir, ".pi", "git", "github.com", "example", "repo");
+			const extensionPath = join(installedPath, "extensions", "index.ts");
+			mkdirSync(join(installedPath, "extensions"), { recursive: true });
+			writeFileSync(extensionPath, "modified code");
+			settingsManager.setProjectPackages([source]);
+
+			const managerWithInternals = packageManager as unknown as PackageManagerInternals;
+			vi.spyOn(managerWithInternals, "runCommandCapture").mockImplementation(async (_command, args) => {
+				if (args[0] === "rev-parse") return "matching-head";
+				if (args[0] === "status") return " M extensions/index.ts";
+				throw new Error(`Unexpected runCommandCapture args: ${args.join(" ")}`);
+			});
+			const runCommandSpy = vi
+				.spyOn(managerWithInternals, "runCommand")
+				.mockImplementation(async (_command, args) => {
+					if (args[0] === "reset") writeFileSync(extensionPath, "configured code");
+				});
+
+			await packageManager.resolve();
+
+			expect(runCommandSpy).toHaveBeenCalledWith("git", ["fetch", "origin", "v2"], { cwd: installedPath });
+			expect(runCommandSpy).toHaveBeenCalledWith("git", ["reset", "--hard", "FETCH_HEAD^{commit}"], {
+				cwd: installedPath,
+			});
+			expect(readFileSync(extensionPath, "utf-8")).toBe("configured code");
 		});
 
 		it("should not resolve a stale pinned git checkout when its configured ref is unavailable offline", async () => {
@@ -354,6 +387,28 @@ Content`,
 			vi.spyOn(managerWithInternals, "runCommandCapture").mockImplementation(async (_command, args) => {
 				if (args[0] === "rev-parse" && args[1] === "HEAD") return "old-head";
 				if (args[0] === "rev-parse" && args[1] === "v2^{commit}") throw new Error("unknown ref");
+				throw new Error(`Unexpected runCommandCapture args: ${args.join(" ")}`);
+			});
+			const runCommandSpy = vi.spyOn(managerWithInternals, "runCommand").mockResolvedValue(undefined);
+
+			const result = await packageManager.resolve();
+
+			expect(runCommandSpy).not.toHaveBeenCalled();
+			expect(result.extensions.some((r) => r.metadata.origin === "package")).toBe(false);
+		});
+
+		it("should not resolve a dirty pinned git checkout offline", async () => {
+			process.env.PI_OFFLINE = "1";
+			const source = "git:github.com/example/repo@v2";
+			const installedPath = join(tempDir, ".pi", "git", "github.com", "example", "repo");
+			mkdirSync(join(installedPath, "extensions"), { recursive: true });
+			writeFileSync(join(installedPath, "extensions", "index.ts"), "modified code");
+			settingsManager.setProjectPackages([source]);
+
+			const managerWithInternals = packageManager as unknown as PackageManagerInternals;
+			vi.spyOn(managerWithInternals, "runCommandCapture").mockImplementation(async (_command, args) => {
+				if (args[0] === "rev-parse") return "matching-head";
+				if (args[0] === "status") return " M extensions/index.ts";
 				throw new Error(`Unexpected runCommandCapture args: ${args.join(" ")}`);
 			});
 			const runCommandSpy = vi.spyOn(managerWithInternals, "runCommand").mockResolvedValue(undefined);

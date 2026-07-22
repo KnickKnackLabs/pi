@@ -1481,10 +1481,19 @@ export class DefaultPackageManager implements PackageManager {
 				cwd: installedPath,
 				timeoutMs: NETWORK_TIMEOUT_MS,
 			});
-			return localHead.trim() === configuredHead.trim();
+			if (localHead.trim() !== configuredHead.trim()) return false;
+			return !(await this.gitCheckoutHasChanges(installedPath));
 		} catch {
 			return false;
 		}
+	}
+
+	private async gitCheckoutHasChanges(installedPath: string): Promise<boolean> {
+		const status = await this.runCommandCapture("git", ["status", "--porcelain=v1", "--untracked-files=normal"], {
+			cwd: installedPath,
+			timeoutMs: NETWORK_TIMEOUT_MS,
+		});
+		return status.length > 0;
 	}
 
 	private async npmHasAvailableUpdate(source: NpmSource, installedPath: string): Promise<boolean> {
@@ -1893,7 +1902,7 @@ export class DefaultPackageManager implements PackageManager {
 			cwd: targetDir,
 			timeoutMs: NETWORK_TIMEOUT_MS,
 		});
-		if (localHead.trim() === targetHead.trim()) {
+		if (localHead.trim() === targetHead.trim() && !(await this.gitCheckoutHasChanges(targetDir))) {
 			return;
 		}
 

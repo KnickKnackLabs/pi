@@ -40,7 +40,7 @@ pi update --extension npm:@foo/bar
 
 These commands manage pi packages and `pi update` can update the pi CLI installation. To uninstall pi itself, see [Quickstart](quickstart.md#uninstall).
 
-By default, `install` and `remove` write to user settings (`~/.pi/agent/settings.json`). Use `-l` to write to project settings (`.pi/settings.json`) instead. Project settings can be shared with your team. On startup and reload, after the project is trusted, pi installs missing packages and reconciles existing pinned git checkouts to their configured refs. A matching checkout requires no network access. In offline mode, pi skips a pinned git package when its configured ref is unavailable locally or does not match the installed checkout.
+By default, `install` and `remove` write to user settings (`~/.pi/agent/settings.json`). Use `-l` to write to project settings (`.pi/settings.json`) instead. Project settings can be shared with your team. On startup and reload, after the project is trusted, pi installs missing packages and reconciles existing pinned git checkouts to their configured refs. A matching, clean checkout requires no network access. In offline mode, pi skips a pinned git package when its configured ref is unavailable locally, does not match the installed checkout, or the checkout has tracked or untracked changes.
 
 To try a package without installing it, use `--extension` or `-e`. This installs to a temporary directory for the current run only:
 
