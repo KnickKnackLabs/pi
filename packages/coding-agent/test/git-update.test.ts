@@ -433,7 +433,7 @@ describe("DefaultPackageManager git update", () => {
 			expect(getFileContent(cachedDir, "pi-extensions/session-breakdown.ts")).toBe("// fresh");
 		});
 
-		it("should not refresh pinned temporary git sources", async () => {
+		it("should not refresh matching pinned temporary git sources", async () => {
 			const managerWithPaths = packageManager as unknown as PackageManagerPathInternals;
 			const cachedDir = managerWithPaths.getGitInstallPath(managerWithPaths.parseSource(gitSource), "temporary");
 			const extensionFile = join(cachedDir, "pi-extensions", "session-breakdown.ts");
@@ -452,9 +452,16 @@ describe("DefaultPackageManager git update", () => {
 			const executedCommands: string[] = [];
 			const managerWithInternals = packageManager as unknown as {
 				runCommand: (command: string, args: string[], options?: { cwd?: string }) => Promise<void>;
+				runCommandCapture: (command: string, args: string[], options?: { cwd?: string }) => Promise<string>;
 			};
 			managerWithInternals.runCommand = async (command, args) => {
 				executedCommands.push(`${command} ${args.join(" ")}`);
+			};
+			managerWithInternals.runCommandCapture = async (_command, args) => {
+				if (args[0] === "rev-parse" && (args[1] === "HEAD" || args[1] === "main^{commit}")) {
+					return "pinned-head";
+				}
+				throw new Error(`Unexpected command: git ${args.join(" ")}`);
 			};
 
 			await packageManager.resolveExtensionSources([`${gitSource}@main`], { temporary: true });
