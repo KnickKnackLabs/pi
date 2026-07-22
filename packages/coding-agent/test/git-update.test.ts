@@ -458,6 +458,7 @@ describe("DefaultPackageManager git update", () => {
 				if (args[0] === "rev-parse" && (args[1] === "HEAD" || args[1] === "main^{commit}")) {
 					return "pinned-head";
 				}
+				if (args[0] === "status") return "";
 				throw new Error(`Unexpected command: git ${args.join(" ")}`);
 			};
 
