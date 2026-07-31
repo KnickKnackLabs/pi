@@ -17,6 +17,7 @@ import {
 	toError,
 	truncateHead,
 } from "@earendil-works/pi-agent-core";
+import { decodeCbor, encodeCbor, PROTOCOL_VERSION } from "@earendil-works/pi-protocol";
 
 // Keep this entry browser-safe. It is bundled by scripts/check-browser-smoke.mjs
 // to catch accidental Node-only runtime imports in browser-facing package exports.
@@ -24,7 +25,7 @@ const model = getModel("google", "gemini-2.5-flash");
 const schema = Type.Object({ prompt: Type.String() });
 const stream = createAssistantMessageEventStream();
 
-const agent = new Agent({ initialState: { model }, streamFunction: streamSimple });
+const agent = new Agent({ initialState: { model }, streamFn: streamSimple });
 agent.steer({ role: "user", content: [{ type: "text", text: "queued" }], timestamp: 0 });
 const repo = new InMemorySessionRepo();
 const result = getOrThrow(ok({ value: 1 }));
@@ -58,4 +59,6 @@ console.log(
 	new FileError("not_found", "missing").code,
 	toError("boom").message,
 	typeof streamProxy,
+	PROTOCOL_VERSION,
+	decodeCbor(encodeCbor({ browser: true })),
 );
