@@ -49,7 +49,7 @@ interface PackageManagerInternals {
 	runGitRemoteCommand(installedPath: string, args: string[]): Promise<string>;
 	runNpmCommand(args: string[], options?: { cwd?: string }): Promise<void>;
 	getLatestGitSemverTag(source: GitSource, cwd: string, remote: string): Promise<GitSemverTag>;
-	ensureGitTag(targetDir: string, tag: GitSemverTag, installDependenciesWhenUnchanged?: boolean): Promise<void>;
+	ensureGitTag(targetDir: string, tag: GitSemverTag, options?: { freshClone?: boolean }): Promise<void>;
 }
 
 // Helper to check if a resource is enabled
@@ -96,6 +96,7 @@ function createTaggedGitRemote(root: string, packageJson = false): { remote: str
 	runGit(source, ["tag", "-a", "v0.4.0", "-m", "v0.4.0"]);
 	runGit(source, ["remote", "add", "origin", remote]);
 	runGit(source, ["push", "-u", "origin", "main", "--tags"]);
+	runGit(remote, ["symbolic-ref", "HEAD", "refs/heads/main"]);
 	return { remote, source };
 }
 
@@ -1054,6 +1055,26 @@ Content`,
 			const installedPath = managerWithInternals.getGitInstallPath(source, "project");
 			expect(runGit(installedPath, ["describe", "--tags", "--exact-match", "HEAD"])).toBe("v0.4.0");
 			expect(readFileSync(join(installedPath, "extensions", "index.ts"), "utf-8")).toContain("0.4.0");
+		});
+
+		it("should install a Git SemVer stream when the remote has no default branch", async () => {
+			const fixture = createTaggedGitRemote(join(tempDir, "install-range-no-default-fixture"));
+			runGit(fixture.remote, ["symbolic-ref", "HEAD", "refs/heads/missing-default"]);
+			const managerWithInternals = packageManager as unknown as PackageManagerInternals;
+			const parsed = managerWithInternals.parseSource("git:github.com/example/repo@~0.4.0");
+			expect(parsed.type).toBe("git");
+			if (parsed.type !== "git") throw new Error("Expected Git source");
+			const source: GitSource = {
+				...parsed,
+				repo: fixture.remote,
+				host: "local.test",
+				path: "example/no-default",
+			};
+
+			await managerWithInternals.installGit(source, "project");
+
+			const installedPath = managerWithInternals.getGitInstallPath(source, "project");
+			expect(runGit(installedPath, ["describe", "--tags", "--exact-match", "HEAD"])).toBe("v0.4.0");
 		});
 
 		it("should install dependencies when a fresh clone already matches the selected tag", async () => {

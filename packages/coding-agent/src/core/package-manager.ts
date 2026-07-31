@@ -1898,7 +1898,7 @@ export class DefaultPackageManager implements PackageManager {
 		try {
 			await this.runCommand("git", ["clone", source.repo, targetDir]);
 			if (selectedTag) {
-				await this.ensureGitTag(targetDir, selectedTag, true);
+				await this.ensureGitTag(targetDir, selectedTag, { freshClone: true });
 				return;
 			}
 			if (source.ref) {
@@ -1940,7 +1940,7 @@ export class DefaultPackageManager implements PackageManager {
 	private async ensureGitTag(
 		targetDir: string,
 		tag: GitSemverTag,
-		installDependenciesWhenUnchanged = false,
+		options: { freshClone?: boolean } = {},
 	): Promise<void> {
 		const tagRef = `refs/tags/${tag.name}`;
 		await this.runCommand("git", ["fetch", "origin", tagRef], { cwd: targetDir });
@@ -1957,8 +1957,10 @@ export class DefaultPackageManager implements PackageManager {
 			throw new Error(`Git tag changed while resolving ${tag.name}`);
 		}
 
-		const changed = await this.reconcileGitRef(targetDir, "FETCH_HEAD");
-		if (!changed && installDependenciesWhenUnchanged) {
+		const changed = await this.reconcileGitRef(targetDir, "FETCH_HEAD", {
+			allowMissingHead: options.freshClone,
+		});
+		if (!changed && options.freshClone) {
 			await this.installGitDependencies(targetDir);
 		}
 		await this.runCommand("git", ["update-ref", tagRef, tag.object], { cwd: targetDir });
@@ -1970,17 +1972,28 @@ export class DefaultPackageManager implements PackageManager {
 		await this.reconcileGitRef(targetDir, ref);
 	}
 
-	private async reconcileGitRef(targetDir: string, ref: string): Promise<boolean> {
-		const localHead = await this.runCommandCapture("git", ["rev-parse", "HEAD"], {
-			cwd: targetDir,
-			timeoutMs: NETWORK_TIMEOUT_MS,
-		});
+	private async reconcileGitRef(
+		targetDir: string,
+		ref: string,
+		options: { allowMissingHead?: boolean } = {},
+	): Promise<boolean> {
+		let localHead: string | undefined;
+		try {
+			localHead = await this.runCommandCapture("git", ["rev-parse", "HEAD"], {
+				cwd: targetDir,
+				timeoutMs: NETWORK_TIMEOUT_MS,
+			});
+		} catch (error) {
+			// A fresh clone can have no checked-out commit when the remote's HEAD is missing.
+			// The caller has already fetched and verified the exact tag we will reset to.
+			if (!options.allowMissingHead) throw error;
+		}
 		const commitRef = `${ref}^{commit}`;
 		const targetHead = await this.runCommandCapture("git", ["rev-parse", commitRef], {
 			cwd: targetDir,
 			timeoutMs: NETWORK_TIMEOUT_MS,
 		});
-		if (localHead.trim() === targetHead.trim() && !(await this.gitCheckoutHasChanges(targetDir))) {
+		if (localHead?.trim() === targetHead.trim() && !(await this.gitCheckoutHasChanges(targetDir))) {
 			return false;
 		}
 
