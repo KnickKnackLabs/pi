@@ -72,7 +72,7 @@ async function createSession(
 	let streamCall = 0;
 	const model = getModel("anthropic", "claude-sonnet-4-5")!;
 	const agent = new Agent({
-		streamFunction: () => {
+		streamFn: () => {
 			streamCall += 1;
 			const stream = new MockAssistantStream();
 			queueMicrotask(() => {
