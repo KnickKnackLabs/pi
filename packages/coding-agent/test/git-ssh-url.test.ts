@@ -60,6 +60,25 @@ describe("Git URL Parsing", () => {
 				repo: "git@github.com:user/repo",
 			});
 		});
+
+		it("should parse explicit SemVer operators as ranges while preserving bare refs", () => {
+			expect(parseGitUrl("git:github.com/user/repo@~0.4.0")).toMatchObject({
+				range: ">=0.4.0 <0.5.0-0",
+				pinned: false,
+			});
+			expect(parseGitUrl("git:github.com/user/repo@^0.4.0")).toMatchObject({
+				range: ">=0.4.0 <0.5.0-0",
+				pinned: false,
+			});
+			expect(parseGitUrl("git:github.com/user/repo@0.4")).toMatchObject({
+				ref: "0.4",
+				pinned: true,
+			});
+		});
+
+		it("should reject invalid operator-prefixed ranges", () => {
+			expect(parseGitUrl("git:github.com/user/repo@~not-a-version")).toBeNull();
+		});
 	});
 
 	it("should reject unsafe git install path inputs", () => {

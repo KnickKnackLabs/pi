@@ -31,6 +31,12 @@ import { maxSatisfying, rcompare, satisfies, valid, validRange } from "semver";
 import { CONFIG_DIR_NAME } from "../config.ts";
 import { spawnProcess, spawnProcessSync } from "../utils/child-process.ts";
 import { type GitSource, parseGitUrl } from "../utils/git.ts";
+import {
+	type GitSemverTag,
+	isGitTagCompatible,
+	parseRemoteGitTags,
+	selectLatestCompatibleGitTag,
+} from "../utils/git-semver.ts";
 import { canonicalizePath, isLocalPath, markPathIgnoredByCloudSync, resolvePath } from "../utils/paths.ts";
 import { isStdoutTakenOver } from "./output-guard.ts";
 import { type PiManifest, readPiManifest } from "./pi-manifest.ts";
@@ -1205,7 +1211,9 @@ export class DefaultPackageManager implements PackageManager {
 				if (!existsSync(installedPath)) {
 					return undefined;
 				}
-				const hasUpdate = await this.gitHasAvailableUpdate(installedPath);
+				const hasUpdate = parsed.range
+					? await this.gitSemverHasAvailableUpdate(parsed, installedPath)
+					: await this.gitHasAvailableUpdate(installedPath);
 				if (!hasUpdate) {
 					return undefined;
 				}
@@ -1272,7 +1280,8 @@ export class DefaultPackageManager implements PackageManager {
 				const installedPath = this.getGitInstallPath(parsed, resolvedScope);
 				const needsInstall =
 					!existsSync(installedPath) ||
-					(parsed.pinned && !(await this.installedGitMatchesConfiguredRef(parsed, installedPath)));
+					((parsed.pinned || parsed.range !== undefined) &&
+						!(await this.installedGitMatchesConfiguredSource(parsed, installedPath)));
 				if (needsInstall) {
 					const installed = await installMissing();
 					if (!installed) continue;
@@ -1454,18 +1463,28 @@ export class DefaultPackageManager implements PackageManager {
 		return source.range ? satisfies(installedVersion, source.range) : true;
 	}
 
-	private async installedGitMatchesConfiguredRef(source: GitSource, installedPath: string): Promise<boolean> {
-		if (!source.ref) return true;
+	private async installedGitMatchesConfiguredSource(source: GitSource, installedPath: string): Promise<boolean> {
 		try {
-			const localHead = await this.runCommandCapture("git", ["rev-parse", "HEAD"], {
-				cwd: installedPath,
-				timeoutMs: NETWORK_TIMEOUT_MS,
-			});
-			const configuredHead = await this.runCommandCapture("git", ["rev-parse", `${source.ref}^{commit}`], {
-				cwd: installedPath,
-				timeoutMs: NETWORK_TIMEOUT_MS,
-			});
-			if (localHead.trim() !== configuredHead.trim()) return false;
+			const range = source.range;
+			if (range) {
+				const tags = await this.runCommandCapture("git", ["tag", "--points-at", "HEAD"], {
+					cwd: installedPath,
+					timeoutMs: NETWORK_TIMEOUT_MS,
+				});
+				if (!tags.split("\n").some((tag) => isGitTagCompatible(tag.trim(), range))) {
+					return false;
+				}
+			} else if (source.ref) {
+				const localHead = await this.runCommandCapture("git", ["rev-parse", "HEAD"], {
+					cwd: installedPath,
+					timeoutMs: NETWORK_TIMEOUT_MS,
+				});
+				const configuredHead = await this.runCommandCapture("git", ["rev-parse", `${source.ref}^{commit}`], {
+					cwd: installedPath,
+					timeoutMs: NETWORK_TIMEOUT_MS,
+				});
+				if (localHead.trim() !== configuredHead.trim()) return false;
+			}
 			return !(await this.gitCheckoutHasChanges(installedPath));
 		} catch {
 			return false;
@@ -1529,6 +1548,30 @@ export class DefaultPackageManager implements PackageManager {
 			if (latest) return latest;
 		}
 		throw new Error("Unexpected response from npm view");
+	}
+
+	private async gitSemverHasAvailableUpdate(source: GitSource, installedPath: string): Promise<boolean> {
+		if (!source.range || isOfflineModeEnabled()) return false;
+		try {
+			const localHead = await this.runCommandCapture("git", ["rev-parse", "HEAD"], {
+				cwd: installedPath,
+				timeoutMs: NETWORK_TIMEOUT_MS,
+			});
+			const target = await this.getLatestGitSemverTag(source, installedPath, "origin");
+			return localHead.trim() !== target.commit;
+		} catch {
+			return false;
+		}
+	}
+
+	private async getLatestGitSemverTag(source: GitSource, cwd: string, remote: string): Promise<GitSemverTag> {
+		if (!source.range) throw new Error("Git package has no SemVer range");
+		const output = await this.runGitRemoteCommand(cwd, ["ls-remote", "--tags", remote]);
+		const selected = selectLatestCompatibleGitTag(parseRemoteGitTags(output), source.range);
+		if (!selected) {
+			throw new Error(`No Git tag satisfies ${source.range} for ${source.host}/${source.path}`);
+		}
+		return selected;
 	}
 
 	private async gitHasAvailableUpdate(installedPath: string): Promise<boolean> {
@@ -1833,6 +1876,10 @@ export class DefaultPackageManager implements PackageManager {
 	private async installGit(source: GitSource, scope: SourceScope): Promise<void> {
 		const targetDir = this.getGitInstallPath(source, scope);
 		if (existsSync(targetDir)) {
+			if (source.range) {
+				await this.updateGitSemverRange(source, targetDir);
+				return;
+			}
 			if (source.ref) {
 				await this.ensureGitRef(targetDir, ["fetch", "origin", source.ref], "FETCH_HEAD");
 				return;
@@ -1848,14 +1895,16 @@ export class DefaultPackageManager implements PackageManager {
 		mkdirSync(dirname(targetDir), { recursive: true });
 
 		try {
+			const selectedTag = source.range ? await this.getLatestGitSemverTag(source, this.cwd, source.repo) : undefined;
 			await this.runCommand("git", ["clone", source.repo, targetDir]);
+			if (selectedTag) {
+				await this.ensureGitTag(targetDir, selectedTag, { freshClone: true });
+				return;
+			}
 			if (source.ref) {
 				await this.runCommand("git", ["checkout", source.ref], { cwd: targetDir });
 			}
-			const packageJsonPath = join(targetDir, "package.json");
-			if (existsSync(packageJsonPath)) {
-				await this.runNpmCommand(this.getGitDependencyInstallArgs(), { cwd: targetDir });
-			}
+			await this.installGitDependencies(targetDir);
 		} catch (error) {
 			rmSync(targetDir, { recursive: true, force: true });
 			this.pruneEmptyGitParents(targetDir, gitRoot);
@@ -1870,6 +1919,10 @@ export class DefaultPackageManager implements PackageManager {
 			return;
 		}
 
+		if (source.range) {
+			await this.updateGitSemverRange(source, targetDir);
+			return;
+		}
 		if (source.ref) {
 			await this.ensureGitRef(targetDir, ["fetch", "origin", source.ref], "FETCH_HEAD");
 			return;
@@ -1879,28 +1932,80 @@ export class DefaultPackageManager implements PackageManager {
 		await this.ensureGitRef(targetDir, target.fetchArgs, target.ref);
 	}
 
-	private async ensureGitRef(targetDir: string, fetchArgs: string[], ref: string): Promise<void> {
-		// Fetch only the ref we will reset to, avoiding unrelated branch/tag noise.
-		await this.runCommand("git", fetchArgs, { cwd: targetDir });
+	private async updateGitSemverRange(source: GitSource, targetDir: string): Promise<void> {
+		const selectedTag = await this.getLatestGitSemverTag(source, targetDir, "origin");
+		await this.ensureGitTag(targetDir, selectedTag);
+	}
 
-		const localHead = await this.runCommandCapture("git", ["rev-parse", "HEAD"], {
+	private async ensureGitTag(
+		targetDir: string,
+		tag: GitSemverTag,
+		options: { freshClone?: boolean } = {},
+	): Promise<void> {
+		const tagRef = `refs/tags/${tag.name}`;
+		await this.runCommand("git", ["fetch", "origin", tagRef], { cwd: targetDir });
+
+		const fetchedObject = await this.runCommandCapture("git", ["rev-parse", "FETCH_HEAD"], {
 			cwd: targetDir,
 			timeoutMs: NETWORK_TIMEOUT_MS,
 		});
+		const fetchedCommit = await this.runCommandCapture("git", ["rev-parse", "FETCH_HEAD^{commit}"], {
+			cwd: targetDir,
+			timeoutMs: NETWORK_TIMEOUT_MS,
+		});
+		if (fetchedObject.trim() !== tag.object || fetchedCommit.trim() !== tag.commit) {
+			throw new Error(`Git tag changed while resolving ${tag.name}`);
+		}
+
+		const changed = await this.reconcileGitRef(targetDir, "FETCH_HEAD", {
+			allowMissingHead: options.freshClone,
+		});
+		if (!changed && options.freshClone) {
+			await this.installGitDependencies(targetDir);
+		}
+		await this.runCommand("git", ["update-ref", tagRef, tag.object], { cwd: targetDir });
+	}
+
+	private async ensureGitRef(targetDir: string, fetchArgs: string[], ref: string): Promise<void> {
+		// Fetch only the ref we will reset to, avoiding unrelated branch/tag noise.
+		await this.runCommand("git", fetchArgs, { cwd: targetDir });
+		await this.reconcileGitRef(targetDir, ref);
+	}
+
+	private async reconcileGitRef(
+		targetDir: string,
+		ref: string,
+		options: { allowMissingHead?: boolean } = {},
+	): Promise<boolean> {
+		let localHead: string | undefined;
+		try {
+			localHead = await this.runCommandCapture("git", ["rev-parse", "HEAD"], {
+				cwd: targetDir,
+				timeoutMs: NETWORK_TIMEOUT_MS,
+			});
+		} catch (error) {
+			// A fresh clone can have no checked-out commit when the remote's HEAD is missing.
+			// The caller has already fetched and verified the exact tag we will reset to.
+			if (!options.allowMissingHead) throw error;
+		}
 		const commitRef = `${ref}^{commit}`;
 		const targetHead = await this.runCommandCapture("git", ["rev-parse", commitRef], {
 			cwd: targetDir,
 			timeoutMs: NETWORK_TIMEOUT_MS,
 		});
-		if (localHead.trim() === targetHead.trim() && !(await this.gitCheckoutHasChanges(targetDir))) {
-			return;
+		if (localHead?.trim() === targetHead.trim() && !(await this.gitCheckoutHasChanges(targetDir))) {
+			return false;
 		}
 
 		await this.runCommand("git", ["reset", "--hard", commitRef], { cwd: targetDir });
 
 		// Clean untracked files (extensions should be pristine)
 		await this.runCommand("git", ["clean", "-fdx"], { cwd: targetDir });
+		await this.installGitDependencies(targetDir);
+		return true;
+	}
 
+	private async installGitDependencies(targetDir: string): Promise<void> {
 		const packageJsonPath = join(targetDir, "package.json");
 		if (existsSync(packageJsonPath)) {
 			await this.runNpmCommand(this.getGitDependencyInstallArgs(), { cwd: targetDir });

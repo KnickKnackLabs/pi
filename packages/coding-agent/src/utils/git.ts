@@ -1,9 +1,10 @@
 import hostedGitInfo from "hosted-git-info";
+import { classifyGitRef } from "./git-semver.ts";
 
 /**
  * Parsed git URL information.
  */
-export type GitSource = {
+type GitSourceLocation = {
 	/** Always "git" for git sources */
 	type: "git";
 	/** Clone URL (always valid for git clone, without ref suffix) */
@@ -12,11 +13,14 @@ export type GitSource = {
 	host: string;
 	/** Repository path (e.g., "user/repo") */
 	path: string;
-	/** Git ref (branch, tag, commit) if specified */
-	ref?: string;
-	/** True if ref was specified (package won't be auto-updated) */
-	pinned: boolean;
 };
+
+export type GitSource = GitSourceLocation &
+	(
+		| { ref?: undefined; range?: undefined; pinned: false }
+		| { ref: string; range?: undefined; pinned: true }
+		| { ref?: undefined; range: string; pinned: false }
+	);
 
 function splitRef(url: string): { repo: string; ref?: string } {
 	const scpLikeMatch = url.match(/^git@([^:]+):(.+)$/);
@@ -113,14 +117,18 @@ function buildGitSource(args: { repo: string; host: string; path: string; ref?: 
 		return null;
 	}
 
-	return {
+	const refSpec = classifyGitRef(args.ref);
+	if (!refSpec) return null;
+
+	const location: GitSourceLocation = {
 		type: "git",
 		repo: args.repo,
 		host: args.host,
 		path: normalizedPath,
-		ref: args.ref,
-		pinned: Boolean(args.ref),
 	};
+	if (refSpec.kind === "exact") return { ...location, ref: refSpec.ref, pinned: true };
+	if (refSpec.kind === "range") return { ...location, range: refSpec.range, pinned: false };
+	return { ...location, pinned: false };
 }
 
 function parseGenericGitUrl(url: string): GitSource | null {

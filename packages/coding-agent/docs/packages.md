@@ -77,6 +77,7 @@ Example:
 
 ```
 git:github.com/user/repo@v1
+git:github.com/user/repo@~1.2.0
 git:git@github.com:user/repo@v1
 https://github.com/user/repo@v1
 ssh://git@github.com/user/repo@v1
@@ -87,7 +88,9 @@ ssh://git@github.com/user/repo@v1
 - HTTPS and SSH URLs are both supported.
 - SSH URLs use your configured SSH keys automatically (respects `~/.ssh/config`).
 - For non-interactive runs (for example CI), you can set `GIT_TERMINAL_PROMPT=0` to disable credential prompts and set `GIT_SSH_COMMAND` (for example `ssh -o BatchMode=yes -o ConnectTimeout=5`) to fail fast.
-- Refs are pinned tags or commits. `pi update --extensions` and `pi update --all` do not move them to newer refs, but they do reconcile an existing clone to the configured ref.
+- Ordinary refs are pinned tags, branches, or commits. `pi update --extensions` and `pi update --all` do not move them to newer refs, but they do reconcile an existing clone to the configured ref.
+- Explicit `~` and `^` SemVer ranges select Git tags, including `v`-prefixed tags. A clean checkout at a compatible local tag loads without a network request; package updates resolve the newest compatible remote tag while preserving the configured range.
+- Bare versions such as `@1.2` remain exact Git refs. Use an operator such as `@~1.2.0` to declare a stream.
 - Use `pi install git:host/user/repo@new-ref` to update settings and move an existing package to a new pinned ref.
 - Cloned to `~/.pi/agent/git/<host>/<path>` (global) or `.pi/git/<host>/<path>` (project).
 - When reconciliation changes the checkout, pi resets and cleans the clone, then runs `npm install` if `package.json` exists.
