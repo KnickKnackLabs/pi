@@ -3929,13 +3929,18 @@ export class InteractiveMode {
 	}
 
 	showNewVersionNotification(release: LatestPiRelease): void {
-		const action = theme.fg("accent", `${APP_NAME} update`);
-		const updateInstruction = theme.fg("muted", `New version ${release.version} is available. Run `) + action;
-		const changelogUrl = "https://pi.dev/changelog";
-		const changelogLink = getCapabilities().hyperlinks
-			? hyperlink(theme.fg("accent", changelogUrl), changelogUrl)
-			: theme.fg("accent", changelogUrl);
-		const changelogLine = theme.fg("muted", "Changelog: ") + changelogLink;
+		const updateInstruction =
+			release.selfUpdate.kind === "package"
+				? theme.fg("muted", `New version ${release.version} is available. Run `) +
+					theme.fg("accent", `${APP_NAME} update`)
+				: theme.fg(
+						"muted",
+						`New version ${release.version} is available. Update through the package manager or wrapper that installed this build.`,
+					);
+		const detailsLink = getCapabilities().hyperlinks
+			? hyperlink(theme.fg("accent", release.details.url), release.details.url)
+			: theme.fg("accent", release.details.url);
+		const detailsLine = theme.fg("muted", `${release.details.label}: `) + detailsLink;
 		const note = release.note?.trim();
 
 		this.chatContainer.addChild(new Spacer(1));
@@ -3952,7 +3957,7 @@ export class InteractiveMode {
 			);
 			this.chatContainer.addChild(new Spacer(1));
 		}
-		this.chatContainer.addChild(new Text(changelogLine, 1, 0));
+		this.chatContainer.addChild(new Text(detailsLine, 1, 0));
 		this.chatContainer.addChild(new DynamicBorder((text) => theme.fg("warning", text)));
 		this.ui.requestRender();
 	}

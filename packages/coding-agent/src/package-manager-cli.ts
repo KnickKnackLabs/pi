@@ -24,7 +24,8 @@ import { DefaultResourceLoader } from "./core/resource-loader.ts";
 import { SettingsManager } from "./core/settings-manager.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
 import { spawnProcess } from "./utils/child-process.ts";
-import { getLatestPiRelease, isNewerPackageVersion } from "./utils/version-check.ts";
+import { createSelfUpdatePlan, type SelfUpdatePlan } from "./utils/self-update-plan.ts";
+import { getLatestPiRelease, type LatestPiRelease } from "./utils/version-check.ts";
 import {
 	cleanupWindowsSelfUpdateQuarantine,
 	quarantineWindowsNativeDependencies,
@@ -464,18 +465,21 @@ function printSelfUpdateNote(note: string): void {
 	console.log();
 }
 
-interface SelfUpdatePlan {
+type LatestReleaseProvider = (currentVersion: string) => Promise<LatestPiRelease | undefined>;
+
+interface SelfUpdateContext {
 	packageName: string;
-	installSpec: string;
 	version: string;
-	shouldRun: boolean;
-	note?: string;
 }
 
-async function getSelfUpdatePlan(force: boolean): Promise<SelfUpdatePlan> {
-	let latestRelease: Awaited<ReturnType<typeof getLatestPiRelease>>;
+async function getSelfUpdatePlan(
+	force: boolean,
+	latestReleaseProvider: LatestReleaseProvider = getLatestPiRelease,
+	context: SelfUpdateContext = { packageName: PACKAGE_NAME, version: VERSION },
+): Promise<SelfUpdatePlan> {
+	let latestRelease: LatestPiRelease | undefined;
 	try {
-		latestRelease = await getLatestPiRelease(VERSION);
+		latestRelease = await latestReleaseProvider(context.version);
 	} catch (error: unknown) {
 		const message = error instanceof Error ? error.message : String(error);
 		throw new Error(`Could not determine latest ${APP_NAME} version: ${message}`);
@@ -484,20 +488,16 @@ async function getSelfUpdatePlan(force: boolean): Promise<SelfUpdatePlan> {
 		throw new Error(`Could not determine latest ${APP_NAME} version.`);
 	}
 
-	const packageName = latestRelease.packageName ?? PACKAGE_NAME;
-	const installSpec = `${packageName}@${latestRelease.version}`;
-	if (force || packageName !== PACKAGE_NAME || isNewerPackageVersion(latestRelease.version, VERSION)) {
-		return {
-			packageName,
-			installSpec,
-			version: latestRelease.version,
-			...(latestRelease.note ? { note: latestRelease.note } : {}),
-			shouldRun: true,
-		};
+	const plan = createSelfUpdatePlan({
+		currentPackageName: context.packageName,
+		currentVersion: context.version,
+		force,
+		latestRelease,
+	});
+	if (plan.kind === "none") {
+		console.log(chalk.green(`${APP_NAME} is already up to date (v${context.version})`));
 	}
-
-	console.log(chalk.green(`${APP_NAME} is already up to date (v${VERSION})`));
-	return { packageName, installSpec, version: latestRelease.version, shouldRun: false };
+	return plan;
 }
 
 async function runSelfUpdate(command: SelfUpdateCommand): Promise<void> {
@@ -535,6 +535,8 @@ function prepareWindowsNpmSelfUpdate(): void {
 
 export interface PackageCommandRuntimeOptions {
 	extensionFactories?: InlineExtension[];
+	latestReleaseProvider?: LatestReleaseProvider;
+	selfUpdateContext?: SelfUpdateContext;
 }
 
 interface CommandSettingsResult {
@@ -832,8 +834,34 @@ export async function handlePackageCommand(
 					}
 				}
 				if (updateTargetIncludesSelf(target)) {
-					const selfUpdatePlan = await getSelfUpdatePlan(options.force);
-					if (!selfUpdatePlan.shouldRun) {
+					const selfUpdateContext = runtimeOptions.selfUpdateContext ?? {
+						packageName: PACKAGE_NAME,
+						version: VERSION,
+					};
+					const selfUpdatePlan = await getSelfUpdatePlan(
+						options.force,
+						runtimeOptions.latestReleaseProvider,
+						selfUpdateContext,
+					);
+					if (selfUpdatePlan.kind === "none") {
+						return true;
+					}
+					if (selfUpdatePlan.kind === "blocked") {
+						console.error(chalk.red(selfUpdatePlan.reason));
+						process.exitCode = 1;
+						return true;
+					}
+					if (selfUpdatePlan.kind === "external") {
+						if (selfUpdatePlan.note) {
+							printSelfUpdateNote(selfUpdatePlan.note);
+						}
+						console.error(chalk.red(`${APP_NAME} cannot self-update this release.`));
+						console.error(
+							chalk.dim(
+								`Update through the package manager or wrapper that installed this build. Release: ${selfUpdatePlan.url}`,
+							),
+						);
+						process.exitCode = 1;
 						return true;
 					}
 					const installMethod = detectInstallMethod();
@@ -849,7 +877,11 @@ export async function handlePackageCommand(
 						packageName: selfUpdatePlan.packageName,
 						installSpec: selfUpdatePlan.installSpec,
 					};
-					const selfUpdateCommand = getSelfUpdateCommand(PACKAGE_NAME, selfUpdateNpmCommand, selfUpdateTarget);
+					const selfUpdateCommand = getSelfUpdateCommand(
+						selfUpdateContext.packageName,
+						selfUpdateNpmCommand,
+						selfUpdateTarget,
+					);
 					if (!selfUpdateCommand) {
 						printSelfUpdateUnavailable(selfUpdateNpmCommand, selfUpdateTarget);
 						process.exitCode = 1;
@@ -873,7 +905,9 @@ export async function handlePackageCommand(
 						process.exitCode = 1;
 						return true;
 					}
-					console.log(chalk.green(`Updated ${APP_NAME} from ${VERSION} to ${selfUpdatePlan.version}`));
+					console.log(
+						chalk.green(`Updated ${APP_NAME} from ${selfUpdateContext.version} to ${selfUpdatePlan.version}`),
+					);
 				}
 				return true;
 			}
