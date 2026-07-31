@@ -84,12 +84,12 @@ export interface ProxyStreamOptions extends ProxySerializableStreamOptions {
  * The server strips the partial field from delta events to reduce bandwidth.
  * We reconstruct the partial message client-side.
  *
- * Use this as the `streamFunction` option when creating an Agent that needs to go through a proxy.
+ * Use this as the `streamFn` option when creating an Agent that needs to go through a proxy.
  *
  * @example
  * ```typescript
  * const agent = new Agent({
- *   streamFunction: (model, context, options) =>
+ *   streamFn: (model, context, options) =>
  *     streamProxy(model, context, {
  *       ...options,
  *       authToken: await getAuthToken(),
@@ -120,7 +120,7 @@ export function streamProxy(model: Model<any>, context: Context, options: ProxyS
 		// Initialize the partial message that we'll build up from events
 		const partial: AssistantMessage = {
 			role: "assistant",
-			stopReason: "stop",
+			stopReason: "pending",
 			content: [],
 			api: model.api,
 			provider: model.provider,
