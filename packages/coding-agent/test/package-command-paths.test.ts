@@ -14,6 +14,7 @@ import { getLatestPiRelease } from "../src/utils/version-check.ts";
 import { allowNetwork } from "./test-network-env.ts";
 
 describe("package commands", () => {
+	const upstreamTestVersion = VERSION.split("-")[0] ?? VERSION;
 	let tempDir: string;
 	let agentDir: string;
 	let projectDir: string;
@@ -26,7 +27,7 @@ describe("package commands", () => {
 	let originalExecPath: string;
 
 	function getNewerPatchVersion(): string {
-		const [major = "0", minor = "0", patch = "0"] = VERSION.split(".");
+		const [major = "0", minor = "0", patch = "0"] = upstreamTestVersion.split(".");
 		return `${major}.${minor}.${Number.parseInt(patch, 10) + 1}`;
 	}
 
@@ -34,6 +35,7 @@ describe("package commands", () => {
 		expect(
 			await handlePackageCommand(args, {
 				latestReleaseProvider: (version) => getLatestPiRelease(version, { channel: "upstream" }),
+				selfUpdateContext: { packageName: PACKAGE_NAME, version: upstreamTestVersion },
 			}),
 		).toBe(true);
 	}
@@ -480,7 +482,7 @@ describe("package commands", () => {
 	it("allows explicit self-update checks when automatic version checks are disabled", async () => {
 		const previousSkipVersionCheck = process.env.PI_SKIP_VERSION_CHECK;
 		process.env.PI_SKIP_VERSION_CHECK = "1";
-		const fetchMock = vi.fn(async () => Response.json({ version: VERSION }));
+		const fetchMock = vi.fn(async () => Response.json({ version: upstreamTestVersion }));
 		vi.stubGlobal("fetch", fetchMock);
 		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -490,7 +492,7 @@ describe("package commands", () => {
 
 			expect(fetchMock).toHaveBeenCalledOnce();
 			expect(logSpy.mock.calls.map(([message]) => String(message)).join("\n")).toContain(
-				`pi is already up to date (v${VERSION})`,
+				`pi is already up to date (v${upstreamTestVersion})`,
 			);
 			expect(errorSpy).not.toHaveBeenCalled();
 			expect(process.exitCode).toBeUndefined();
@@ -503,7 +505,7 @@ describe("package commands", () => {
 		}
 	});
 
-	it("refuses package self-update for a KKL release", async () => {
+	it("fails closed before package install when a KKL build receives package update metadata", async () => {
 		const globalPrefix = join(tempDir, "global-prefix");
 		const selfPackageDir = join(globalPrefix, "lib", "node_modules", "@earendil-works", "pi-coding-agent");
 		const fakeNpmPath = join(tempDir, "fake-npm.cjs");
@@ -525,22 +527,20 @@ else fs.writeFileSync(${JSON.stringify(recordPath)},JSON.stringify(args));
 			value: join(selfPackageDir, "dist", "cli.js"),
 			configurable: true,
 		});
-		const releaseUrl = "https://github.com/KnickKnackLabs/pi/releases/tag/v0.83.0-kkl.999";
-		const fetchMock = vi.fn(async () => Response.json({ html_url: releaseUrl, tag_name: "v0.83.0-kkl.999" }));
-		vi.stubGlobal("fetch", fetchMock);
+		const latestReleaseProvider = vi.fn(async () => ({
+			version: "0.84.0",
+			selfUpdate: { kind: "package" as const, packageName: PACKAGE_NAME },
+			details: { label: "Changelog" as const, url: "https://pi.dev/changelog" },
+		}));
 		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-		await expect(handlePackageCommand(["update", "--self"])).resolves.toBe(true);
+		await expect(handlePackageCommand(["update", "--self"], { latestReleaseProvider })).resolves.toBe(true);
 
 		expect(process.exitCode).toBe(1);
 		expect(existsSync(recordPath)).toBe(false);
-		expect(fetchMock).toHaveBeenCalledWith(
-			"https://api.github.com/repos/KnickKnackLabs/pi/releases/latest",
-			expect.any(Object),
-		);
+		expect(latestReleaseProvider).toHaveBeenCalledWith(VERSION);
 		const stderr = errorSpy.mock.calls.map(([message]) => String(message)).join("\n");
-		expect(stderr).toContain("pi cannot self-update this release.");
-		expect(stderr).toContain(releaseUrl);
+		expect(stderr).toContain("KKL builds cannot use package self-update.");
 	});
 
 	it("uses the update check version for forced self updates even when current", async () => {
@@ -571,7 +571,7 @@ else fs.writeFileSync(${JSON.stringify(recordPath)},JSON.stringify(args));
 			value: join(selfPackageDir, "dist", "cli.js"),
 			configurable: true,
 		});
-		const fetchMock = vi.fn(async () => Response.json({ version: VERSION }));
+		const fetchMock = vi.fn(async () => Response.json({ version: upstreamTestVersion }));
 		vi.stubGlobal("fetch", fetchMock);
 
 		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -586,10 +586,10 @@ else fs.writeFileSync(${JSON.stringify(recordPath)},JSON.stringify(args));
 			const stdout = logSpy.mock.calls.map(([message]) => String(message)).join("\n");
 			const recordedArgs = JSON.parse(readFileSync(recordPath, "utf-8")) as string[];
 			expect(recordedArgs).toContain(globalPrefix);
-			expect(recordedArgs).toContain(`${PACKAGE_NAME}@${VERSION}`);
+			expect(recordedArgs).toContain(`${PACKAGE_NAME}@${upstreamTestVersion}`);
 			expect(recordedArgs).not.toContain(PACKAGE_NAME);
 			expect(recordedArgs).not.toContain(projectPrefix);
-			expect(stdout).toContain(`Updated pi from ${VERSION} to ${VERSION}`);
+			expect(stdout).toContain(`Updated pi from ${upstreamTestVersion} to ${upstreamTestVersion}`);
 		} finally {
 			logSpy.mockRestore();
 			errorSpy.mockRestore();
@@ -635,7 +635,7 @@ else fs.writeFileSync(${JSON.stringify(recordPath)},JSON.stringify(args));
 			const recordedArgs = JSON.parse(readFileSync(recordPath, "utf-8")) as string[];
 			expect(recordedArgs).toContain(`${PACKAGE_NAME}@${targetVersion}`);
 			expect(recordedArgs).not.toContain(PACKAGE_NAME);
-			expect(stdout).toContain(`Updated pi from ${VERSION} to ${targetVersion}`);
+			expect(stdout).toContain(`Updated pi from ${upstreamTestVersion} to ${targetVersion}`);
 		} finally {
 			logSpy.mockRestore();
 			errorSpy.mockRestore();
