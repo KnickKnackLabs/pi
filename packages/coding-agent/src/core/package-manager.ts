@@ -1894,8 +1894,8 @@ export class DefaultPackageManager implements PackageManager {
 		}
 		mkdirSync(dirname(targetDir), { recursive: true });
 
-		const selectedTag = source.range ? await this.getLatestGitSemverTag(source, this.cwd, source.repo) : undefined;
 		try {
+			const selectedTag = source.range ? await this.getLatestGitSemverTag(source, this.cwd, source.repo) : undefined;
 			await this.runCommand("git", ["clone", source.repo, targetDir]);
 			if (selectedTag) {
 				await this.ensureGitTag(targetDir, selectedTag, { freshClone: true });
