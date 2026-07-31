@@ -87,6 +87,15 @@ if [[ "$OUTPUT_DIR" != /* ]]; then
     OUTPUT_DIR="$(pwd)/$OUTPUT_DIR"
 fi
 
+NATIVE_DEPS_DIR=""
+CLIPBOARD_MODULE_ROOT="$(pwd)/node_modules/@mariozechner"
+cleanup_native_deps() {
+    if [[ -n "$NATIVE_DEPS_DIR" ]]; then
+        rm -rf "$NATIVE_DEPS_DIR"
+    fi
+}
+trap cleanup_native_deps EXIT
+
 if [[ "$SKIP_INSTALL" == "false" ]]; then
     echo "==> Installing dependencies..."
     npm ci --ignore-scripts
@@ -97,11 +106,12 @@ fi
 if [[ "$SKIP_DEPS" == "false" ]]; then
     echo "==> Installing cross-platform native bindings..."
     CLIPBOARD_VERSION=$(node -p "require('./packages/coding-agent/package.json').optionalDependencies['@mariozechner/clipboard']")
-    # npm ci only installs optional deps for the current platform
-    # We need the base clipboard package and all platform bindings for bun cross-compilation
-    # Use --force to bypass platform checks (os/cpu restrictions in package.json)
-    # Install all in one command to avoid npm removing packages from previous installs
-    npm install --include=optional --no-save --package-lock=false --force --ignore-scripts \
+    # npm ci only installs optional deps for the current platform.
+    # Install all cross-platform bindings in an isolated prefix so npm does not
+    # mutate or re-resolve the monorepo workspace graph.
+    NATIVE_DEPS_DIR="$(mktemp -d "${TMPDIR:-/tmp}/pi-native-deps.XXXXXX")"
+    CLIPBOARD_MODULE_ROOT="$NATIVE_DEPS_DIR/node_modules/@mariozechner"
+    npm install --prefix "$NATIVE_DEPS_DIR" --include=optional --no-save --package-lock=false --force --ignore-scripts \
         @mariozechner/clipboard@"$CLIPBOARD_VERSION" \
         @mariozechner/clipboard-darwin-arm64@"$CLIPBOARD_VERSION" \
         @mariozechner/clipboard-darwin-x64@"$CLIPBOARD_VERSION" \
@@ -194,9 +204,9 @@ for platform in "${PLATFORMS[@]}"; do
             ;;
     esac
     mkdir -p "$OUTPUT_DIR/$platform/node_modules/@mariozechner"
-    cp -r ../../node_modules/@mariozechner/clipboard "$OUTPUT_DIR/$platform/node_modules/@mariozechner/"
-    cp -r ../../node_modules/@mariozechner/$clipboard_native_package "$OUTPUT_DIR/$platform/node_modules/@mariozechner/"
-    cp "../../node_modules/@mariozechner/$clipboard_native_package/$clipboard_native_file" \
+    cp -r "$CLIPBOARD_MODULE_ROOT/clipboard" "$OUTPUT_DIR/$platform/node_modules/@mariozechner/"
+    cp -r "$CLIPBOARD_MODULE_ROOT/$clipboard_native_package" "$OUTPUT_DIR/$platform/node_modules/@mariozechner/"
+    cp "$CLIPBOARD_MODULE_ROOT/$clipboard_native_package/$clipboard_native_file" \
         "$OUTPUT_DIR/$platform/node_modules/@mariozechner/clipboard/"
 
     # Copy terminal input native helpers next to compiled binaries.
