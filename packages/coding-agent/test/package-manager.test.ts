@@ -1036,6 +1036,20 @@ Content`,
 			expect(runCommandSpy).toHaveBeenCalledWith("npm", ["install", "--omit=dev"], { cwd: targetDir });
 		});
 
+		it("should prune newly created parents when Git SemVer resolution fails", async () => {
+			const source = "git:github.com/user/repo@~0.4.0";
+			const targetDir = join(agentDir, "git", "github.com", "user", "repo");
+			const managerWithInternals = packageManager as unknown as PackageManagerInternals;
+			vi.spyOn(managerWithInternals, "getLatestGitSemverTag").mockRejectedValue(
+				new Error("No Git tag satisfies ~0.4.0 for github.com/user/repo"),
+			);
+
+			await expect(packageManager.install(source)).rejects.toThrow("No Git tag satisfies ~0.4.0");
+
+			expect(existsSync(targetDir)).toBe(false);
+			expect(existsSync(dirname(targetDir))).toBe(false);
+		});
+
 		it("should install the newest compatible tag from a Git SemVer stream", async () => {
 			const fixture = createTaggedGitRemote(join(tempDir, "install-range-fixture"));
 			publishGitVersion(fixture.source, "v0.5.0");
