@@ -96,14 +96,8 @@ describe("AgentSession tool transforms", () => {
 			],
 		});
 
-		const bash = session.getToolDefinition("bash")!;
-		const result = await bash.execute(
-			"configured-call",
-			{ command: 'printf %s "$PI_CONFIGURED_TOOL"' },
-			undefined,
-			undefined,
-			{} as never,
-		);
+		const bash = session.agent.state.tools.find((tool) => tool.name === "bash")!;
+		const result = await bash.execute("configured-call", { command: 'printf %s "$PI_CONFIGURED_TOOL"' });
 
 		expect(trace).toEqual(["transform"]);
 		expect(result.content).toEqual([{ type: "text", text: "preserved" }]);
