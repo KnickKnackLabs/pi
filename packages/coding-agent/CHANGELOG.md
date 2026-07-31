@@ -12,6 +12,7 @@
 
 ### Fixed
 
+- Fixed KKL builds to check the KKL release channel and refuse package self-updates that could replace the fork with upstream Pi.
 - Fixed startup and reload to reconcile installed pinned git packages to their configured refs instead of loading stale checkouts.
 - Fixed malformed resource arrays in package manifests crashing session startup ([#7187](https://github.com/earendil-works/pi/issues/7187)).
 - Fixed `setToolsExpanded(false)` to be a no-op when tool output is already collapsed, avoiding redundant `Tool output: collapsed` startup notices from extensions ([#7292](https://github.com/earendil-works/pi/issues/7292)).

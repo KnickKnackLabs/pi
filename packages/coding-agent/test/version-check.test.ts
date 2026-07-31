@@ -4,6 +4,7 @@ import {
 	comparePackageVersions,
 	getLatestPiRelease,
 	getLatestPiVersion,
+	isKklVersion,
 	isNewerPackageVersion,
 } from "../src/utils/version-check.ts";
 import { allowNetwork } from "./test-network-env.ts";
@@ -38,7 +39,11 @@ describe("version checks", () => {
 		vi.stubGlobal("fetch", fetchMock);
 
 		await expect(checkForNewPiVersion("1.2.3")).resolves.toBeUndefined();
-		await expect(checkForNewPiVersion("1.2.2")).resolves.toEqual({ version: "1.2.3" });
+		await expect(checkForNewPiVersion("1.2.2")).resolves.toEqual({
+			version: "1.2.3",
+			selfUpdate: { kind: "package" },
+			details: { label: "Changelog", url: "https://pi.dev/changelog" },
+		});
 	});
 
 	it("uses the pi.dev version check api with a pi user agent", async () => {
@@ -67,8 +72,9 @@ describe("version checks", () => {
 		vi.stubGlobal("fetch", fetchMock);
 
 		await expect(getLatestPiRelease("1.2.3")).resolves.toEqual({
-			packageName: "@new-scope/pi",
 			version: "1.2.4",
+			selfUpdate: { kind: "package", packageName: "@new-scope/pi" },
+			details: { label: "Changelog", url: "https://pi.dev/changelog" },
 		});
 	});
 
@@ -76,7 +82,49 @@ describe("version checks", () => {
 		const fetchMock = vi.fn(async () => Response.json({ note: " **Read this** ", version: "1.2.4" }));
 		vi.stubGlobal("fetch", fetchMock);
 
-		await expect(getLatestPiRelease("1.2.3")).resolves.toEqual({ note: "**Read this**", version: "1.2.4" });
+		await expect(getLatestPiRelease("1.2.3")).resolves.toEqual({
+			note: "**Read this**",
+			version: "1.2.4",
+			selfUpdate: { kind: "package" },
+			details: { label: "Changelog", url: "https://pi.dev/changelog" },
+		});
+	});
+
+	it("uses the KKL release channel for KKL builds", async () => {
+		const releaseUrl = "https://github.com/KnickKnackLabs/pi/releases/tag/v0.83.0-kkl.2";
+		const fetchMock = vi.fn(async () => Response.json({ html_url: releaseUrl, tag_name: "v0.83.0-kkl.2" }));
+		vi.stubGlobal("fetch", fetchMock);
+
+		await expect(checkForNewPiVersion("0.83.0-kkl.1")).resolves.toEqual({
+			version: "0.83.0-kkl.2",
+			selfUpdate: { kind: "external", url: releaseUrl },
+			details: { label: "Release", url: releaseUrl },
+		});
+		expect(fetchMock).toHaveBeenCalledWith(
+			"https://api.github.com/repos/KnickKnackLabs/pi/releases/latest",
+			expect.objectContaining({
+				headers: expect.objectContaining({
+					"User-Agent": expect.stringMatching(/^pi\/0\.83\.0-kkl\.1 /),
+					accept: "application/vnd.github+json",
+				}),
+			}),
+		);
+	});
+
+	it("rejects non-KKL tags from the KKL release channel", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				Response.json({
+					html_url: "https://github.com/KnickKnackLabs/pi/releases/tag/v0.84.0",
+					tag_name: "v0.84.0",
+				}),
+			),
+		);
+
+		await expect(getLatestPiRelease("0.83.0-kkl.1")).resolves.toBeUndefined();
+		expect(isKklVersion("0.83.0-kkl.1")).toBe(true);
+		expect(isKklVersion("0.83.0")).toBe(false);
 	});
 
 	it("skips automatic api calls when version checks are disabled", async () => {

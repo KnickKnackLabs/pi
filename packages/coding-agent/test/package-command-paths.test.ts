@@ -10,6 +10,7 @@ import { ProjectTrustStore } from "../src/core/trust-manager.ts";
 import { main } from "../src/main.ts";
 import { ConfigSelectorComponent } from "../src/modes/interactive/components/config-selector.ts";
 import { handlePackageCommand } from "../src/package-manager-cli.ts";
+import { getLatestPiRelease } from "../src/utils/version-check.ts";
 import { allowNetwork } from "./test-network-env.ts";
 
 describe("package commands", () => {
@@ -30,7 +31,11 @@ describe("package commands", () => {
 	}
 
 	async function runPackageCommandDirectly(args: string[]): Promise<void> {
-		expect(await handlePackageCommand(args)).toBe(true);
+		expect(
+			await handlePackageCommand(args, {
+				latestReleaseProvider: (version) => getLatestPiRelease(version, { channel: "upstream" }),
+			}),
+		).toBe(true);
 	}
 
 	function extensionPaths(
@@ -496,6 +501,46 @@ describe("package commands", () => {
 				process.env.PI_SKIP_VERSION_CHECK = previousSkipVersionCheck;
 			}
 		}
+	});
+
+	it("refuses package self-update for a KKL release", async () => {
+		const globalPrefix = join(tempDir, "global-prefix");
+		const selfPackageDir = join(globalPrefix, "lib", "node_modules", "@earendil-works", "pi-coding-agent");
+		const fakeNpmPath = join(tempDir, "fake-npm.cjs");
+		const recordPath = join(tempDir, "self-update.json");
+		mkdirSync(selfPackageDir, { recursive: true });
+		writeFileSync(
+			fakeNpmPath,
+			`const fs=require("node:fs"),path=require("node:path"),args=process.argv.slice(2),prefix=args[args.indexOf("--prefix")+1];
+if(args.includes("root")) console.log(path.join(prefix,"lib","node_modules"));
+else fs.writeFileSync(${JSON.stringify(recordPath)},JSON.stringify(args));
+`,
+		);
+		writeFileSync(
+			join(agentDir, "settings.json"),
+			JSON.stringify({ npmCommand: [originalExecPath, fakeNpmPath, "--prefix", globalPrefix] }, null, 2),
+		);
+		process.env.PI_PACKAGE_DIR = selfPackageDir;
+		Object.defineProperty(process, "execPath", {
+			value: join(selfPackageDir, "dist", "cli.js"),
+			configurable: true,
+		});
+		const releaseUrl = "https://github.com/KnickKnackLabs/pi/releases/tag/v0.83.0-kkl.999";
+		const fetchMock = vi.fn(async () => Response.json({ html_url: releaseUrl, tag_name: "v0.83.0-kkl.999" }));
+		vi.stubGlobal("fetch", fetchMock);
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		await expect(handlePackageCommand(["update", "--self"])).resolves.toBe(true);
+
+		expect(process.exitCode).toBe(1);
+		expect(existsSync(recordPath)).toBe(false);
+		expect(fetchMock).toHaveBeenCalledWith(
+			"https://api.github.com/repos/KnickKnackLabs/pi/releases/latest",
+			expect.any(Object),
+		);
+		const stderr = errorSpy.mock.calls.map(([message]) => String(message)).join("\n");
+		expect(stderr).toContain("pi cannot self-update this release.");
+		expect(stderr).toContain(releaseUrl);
 	});
 
 	it("uses the update check version for forced self updates even when current", async () => {
