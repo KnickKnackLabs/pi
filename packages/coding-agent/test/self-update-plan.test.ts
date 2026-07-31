@@ -59,6 +59,21 @@ describe("self-update plans", () => {
 		});
 	});
 
+	it.each([false, true])("blocks package self-update metadata for a KKL build (force: %s)", (force) => {
+		expect(
+			createSelfUpdatePlan({
+				currentPackageName,
+				currentVersion: "0.83.0-kkl.1",
+				force,
+				latestRelease: {
+					version: "0.84.0",
+					selfUpdate: { kind: "package", packageName: currentPackageName },
+					details: { label: "Changelog", url: "https://pi.dev/changelog" },
+				},
+			}),
+		).toEqual({ kind: "blocked", reason: "KKL builds cannot use package self-update." });
+	});
+
 	it("keeps KKL releases outside package self-update", () => {
 		const releaseUrl = "https://github.com/KnickKnackLabs/pi/releases/tag/v0.83.0-kkl.2";
 		expect(
