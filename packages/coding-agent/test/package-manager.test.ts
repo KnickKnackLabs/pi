@@ -1,11 +1,14 @@
+import { execFileSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DefaultPackageManager, type ProgressEvent, type ResolvedResource } from "../src/core/package-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
+import type { GitSource } from "../src/utils/git.ts";
+import type { GitSemverTag } from "../src/utils/git-semver.ts";
 
 function normalizeForMatch(value: string): string {
 	return value.replace(/\\/g, "/");
@@ -35,18 +38,18 @@ interface PackageManagerInternals {
 	getLocalGitUpdateTarget(installedPath: string): Promise<{ ref: string; head: string; fetchArgs: string[] }>;
 	parseSource(
 		source: string,
-	):
-		| { type: "npm"; spec: string; name: string; pinned: boolean }
-		| { type: "git"; repo: string; host: string; path: string; pinned: boolean; ref?: string }
-		| { type: "local"; path: string };
+	): { type: "npm"; spec: string; name: string; pinned: boolean } | GitSource | { type: "local"; path: string };
 	getNpmInstallPath(
 		source: { type: "npm"; spec: string; name: string; pinned: boolean },
 		scope: "user" | "project" | "temporary",
 	): string;
-	getGitInstallPath(
-		source: { type: "git"; repo: string; host: string; path: string; pinned: boolean; ref?: string },
-		scope: "user" | "project" | "temporary",
-	): string;
+	getGitInstallPath(source: GitSource, scope: "user" | "project" | "temporary"): string;
+	installGit(source: GitSource, scope: "user" | "project" | "temporary"): Promise<void>;
+	updateGit(source: GitSource, scope: "user" | "project" | "temporary"): Promise<void>;
+	runGitRemoteCommand(installedPath: string, args: string[]): Promise<string>;
+	runNpmCommand(args: string[], options?: { cwd?: string }): Promise<void>;
+	getLatestGitSemverTag(source: GitSource, cwd: string, remote: string): Promise<GitSemverTag>;
+	ensureGitTag(targetDir: string, tag: GitSemverTag, installDependenciesWhenUnchanged?: boolean): Promise<void>;
 }
 
 // Helper to check if a resource is enabled
@@ -65,6 +68,45 @@ const isDisabled = (r: ResolvedResource, pathMatch: string, matchFn: "endsWith" 
 		? normalizedPath.endsWith(normalizedMatch) && !r.enabled
 		: normalizedPath.includes(normalizedMatch) && !r.enabled;
 };
+
+function runGit(cwd: string, args: string[]): string {
+	return execFileSync("git", ["-c", "commit.gpgSign=false", "-c", "tag.gpgSign=false", ...args], {
+		cwd,
+		encoding: "utf-8",
+		timeout: 10_000,
+	}).trim();
+}
+
+function createTaggedGitRemote(root: string, packageJson = false): { remote: string; source: string } {
+	const remote = join(root, "remote.git");
+	const source = join(root, "source");
+	mkdirSync(remote, { recursive: true });
+	mkdirSync(source, { recursive: true });
+	runGit(remote, ["init", "--bare"]);
+	runGit(source, ["init", "-b", "main"]);
+	runGit(source, ["config", "user.name", "Pi Test"]);
+	runGit(source, ["config", "user.email", "pi-test@example.com"]);
+	mkdirSync(join(source, "extensions"), { recursive: true });
+	writeFileSync(join(source, "extensions", "index.ts"), "export const version = '0.4.0';\n");
+	if (packageJson) {
+		writeFileSync(join(source, "package.json"), JSON.stringify({ name: "git-range-fixture", version: "0.4.0" }));
+	}
+	runGit(source, ["add", "extensions/index.ts", ...(packageJson ? ["package.json"] : [])]);
+	runGit(source, ["commit", "-m", "v0.4.0"]);
+	runGit(source, ["tag", "-a", "v0.4.0", "-m", "v0.4.0"]);
+	runGit(source, ["remote", "add", "origin", remote]);
+	runGit(source, ["push", "-u", "origin", "main", "--tags"]);
+	return { remote, source };
+}
+
+function publishGitVersion(source: string, version: string): string {
+	writeFileSync(join(source, "extensions", "index.ts"), `export const version = '${version}';\n`);
+	runGit(source, ["add", "extensions/index.ts"]);
+	runGit(source, ["commit", "-m", version]);
+	runGit(source, ["tag", version]);
+	runGit(source, ["push", "origin", "main", "--tags"]);
+	return runGit(source, ["rev-parse", "HEAD"]);
+}
 
 describe("DefaultPackageManager", () => {
 	let tempDir: string;
@@ -344,6 +386,38 @@ Content`,
 			]);
 			expect(runCommandSpy).not.toHaveBeenCalled();
 			expect(result.extensions.some((r) => r.path === join(installedPath, "extensions", "index.ts"))).toBe(true);
+		});
+
+		it("should resolve a clean locally tagged Git stream without network access", async () => {
+			const source = "git:github.com/example/repo@~0.4.0";
+			const remote = createTaggedGitRemote(join(tempDir, "range-fixture")).remote;
+			const installedPath = join(tempDir, ".pi", "git", "github.com", "example", "repo");
+			mkdirSync(dirname(installedPath), { recursive: true });
+			runGit(tempDir, ["clone", remote, installedPath]);
+			runGit(installedPath, ["checkout", "v0.4.0"]);
+			settingsManager.setProjectPackages([source]);
+
+			const remoteCommandSpy = vi.spyOn(packageManager as unknown as PackageManagerInternals, "runGitRemoteCommand");
+			const result = await packageManager.resolve();
+
+			expect(remoteCommandSpy).not.toHaveBeenCalled();
+			expect(result.extensions.some((r) => r.path === join(installedPath, "extensions", "index.ts"))).toBe(true);
+		});
+
+		it("should not resolve an incompatible locally tagged Git stream offline", async () => {
+			process.env.PI_OFFLINE = "1";
+			const source = "git:github.com/example/repo@~0.4.0";
+			const fixture = createTaggedGitRemote(join(tempDir, "offline-range-fixture"));
+			publishGitVersion(fixture.source, "v0.5.0");
+			const installedPath = join(tempDir, ".pi", "git", "github.com", "example", "repo");
+			mkdirSync(dirname(installedPath), { recursive: true });
+			runGit(tempDir, ["clone", fixture.remote, installedPath]);
+			runGit(installedPath, ["checkout", "v0.5.0"]);
+			settingsManager.setProjectPackages([source]);
+
+			const result = await packageManager.resolve();
+
+			expect(result.extensions.some((r) => r.metadata.origin === "package")).toBe(false);
 		});
 
 		it("should restore a dirty pinned git checkout before resolving its resources", async () => {
@@ -925,6 +999,104 @@ Content`,
 			expect(runCommandSpy).toHaveBeenCalledWith("npm", ["install", "--omit=dev"], { cwd: targetDir });
 		});
 
+		it("should install the newest compatible tag from a Git SemVer stream", async () => {
+			const fixture = createTaggedGitRemote(join(tempDir, "install-range-fixture"));
+			publishGitVersion(fixture.source, "v0.5.0");
+			const managerWithInternals = packageManager as unknown as PackageManagerInternals;
+			const parsed = managerWithInternals.parseSource("git:github.com/example/repo@~0.4.0");
+			expect(parsed.type).toBe("git");
+			if (parsed.type !== "git") throw new Error("Expected Git source");
+			const source: GitSource = {
+				...parsed,
+				repo: fixture.remote,
+				host: "local.test",
+				path: "example/repo",
+			};
+
+			await managerWithInternals.installGit(source, "project");
+
+			const installedPath = managerWithInternals.getGitInstallPath(source, "project");
+			expect(runGit(installedPath, ["describe", "--tags", "--exact-match", "HEAD"])).toBe("v0.4.0");
+			expect(readFileSync(join(installedPath, "extensions", "index.ts"), "utf-8")).toContain("0.4.0");
+		});
+
+		it("should install dependencies when a fresh clone already matches the selected tag", async () => {
+			const fixture = createTaggedGitRemote(join(tempDir, "install-range-dependencies-fixture"), true);
+			const managerWithInternals = packageManager as unknown as PackageManagerInternals;
+			const parsed = managerWithInternals.parseSource("git:github.com/example/repo@~0.4.0");
+			expect(parsed.type).toBe("git");
+			if (parsed.type !== "git") throw new Error("Expected Git source");
+			const source: GitSource = {
+				...parsed,
+				repo: fixture.remote,
+				host: "local.test",
+				path: "example/dependencies",
+			};
+			const installDependenciesSpy = vi.spyOn(managerWithInternals, "runNpmCommand").mockResolvedValue(undefined);
+
+			await managerWithInternals.installGit(source, "project");
+
+			const installedPath = managerWithInternals.getGitInstallPath(source, "project");
+			expect(runGit(installedPath, ["describe", "--tags", "--exact-match", "HEAD"])).toBe("v0.4.0");
+			expect(installDependenciesSpy).toHaveBeenCalledWith(["install", "--omit=dev"], { cwd: installedPath });
+		});
+
+		it("should reject a tag that moves between range resolution and fetch", async () => {
+			const fixture = createTaggedGitRemote(join(tempDir, "moved-range-tag-fixture"));
+			const managerWithInternals = packageManager as unknown as PackageManagerInternals;
+			const parsed = managerWithInternals.parseSource("git:github.com/example/repo@~0.4.0");
+			expect(parsed.type).toBe("git");
+			if (parsed.type !== "git") throw new Error("Expected Git source");
+			const source: GitSource = {
+				...parsed,
+				repo: fixture.remote,
+				host: "local.test",
+				path: "example/moved-tag",
+			};
+			const installedPath = managerWithInternals.getGitInstallPath(source, "project");
+			mkdirSync(dirname(installedPath), { recursive: true });
+			runGit(tempDir, ["clone", fixture.remote, installedPath]);
+			runGit(installedPath, ["checkout", "v0.4.0"]);
+			publishGitVersion(fixture.source, "v0.4.1");
+			const selected = await managerWithInternals.getLatestGitSemverTag(source, installedPath, "origin");
+			const originalHead = runGit(installedPath, ["rev-parse", "HEAD"]);
+
+			writeFileSync(join(fixture.source, "extensions", "index.ts"), "export const version = 'moved';\n");
+			runGit(fixture.source, ["add", "extensions/index.ts"]);
+			runGit(fixture.source, ["commit", "-m", "move v0.4.1"]);
+			runGit(fixture.source, ["tag", "-f", "v0.4.1"]);
+			runGit(fixture.source, ["push", "origin", "main"]);
+			runGit(fixture.source, ["push", "--force", "origin", "refs/tags/v0.4.1"]);
+
+			await expect(managerWithInternals.ensureGitTag(installedPath, selected)).rejects.toThrow(
+				"Git tag changed while resolving v0.4.1",
+			);
+			expect(runGit(installedPath, ["rev-parse", "HEAD"])).toBe(originalHead);
+			expect(runGit(installedPath, ["tag", "--list", "v0.4.1"])).toBe("");
+		});
+
+		it("should update a Git SemVer stream without changing its settings declaration", async () => {
+			const source = "git:github.com/example/repo@~0.4.0";
+			const fixture = createTaggedGitRemote(join(tempDir, "update-range-fixture"));
+			const managerWithInternals = packageManager as unknown as PackageManagerInternals;
+			const parsed = managerWithInternals.parseSource(source);
+			expect(parsed.type).toBe("git");
+			if (parsed.type !== "git") throw new Error("Expected Git source");
+			const installedPath = managerWithInternals.getGitInstallPath(parsed, "project");
+			mkdirSync(dirname(installedPath), { recursive: true });
+			runGit(tempDir, ["clone", fixture.remote, installedPath]);
+			runGit(installedPath, ["checkout", "v0.4.0"]);
+			settingsManager.setProjectPackages([source]);
+			const compatibleHead = publishGitVersion(fixture.source, "v0.4.1");
+			publishGitVersion(fixture.source, "v0.5.0");
+
+			await packageManager.update(source);
+
+			expect(runGit(installedPath, ["rev-parse", "HEAD"])).toBe(compatibleHead);
+			expect(runGit(installedPath, ["describe", "--tags", "--exact-match", "HEAD"])).toBe("v0.4.1");
+			expect(settingsManager.getProjectSettings().packages).toEqual([source]);
+		});
+
 		it("should reconcile an existing git checkout to its update target when installing without a ref", async () => {
 			const source = "git:github.com/user/repo";
 			const targetDir = join(agentDir, "git", "github.com", "user", "repo");
@@ -1300,8 +1472,8 @@ Content`,
 	describe("git install paths", () => {
 		it("should reject paths outside git install roots", () => {
 			const managerWithInternals = packageManager as unknown as PackageManagerInternals;
-			const traversalSource = {
-				type: "git" as const,
+			const traversalSource: GitSource = {
+				type: "git",
 				repo: "git@evil.example:../../victim/repo",
 				host: "evil.example",
 				path: "../../victim/repo",
@@ -2541,6 +2713,34 @@ export default function(api) { api.registerTool({ name: "test", description: "te
 					source: "npm:example",
 					displayName: "example",
 					type: "npm",
+					scope: "project",
+				},
+			]);
+		});
+
+		it("should report a newer compatible Git SemVer tag", async () => {
+			const source = "git:github.com/example/repo@~0.4.0";
+			const fixture = createTaggedGitRemote(join(tempDir, "range-update-check-fixture"));
+			const parsed = (packageManager as unknown as PackageManagerInternals).parseSource(source);
+			expect(parsed.type).toBe("git");
+			if (parsed.type !== "git") throw new Error("Expected Git source");
+			const installedPath = (packageManager as unknown as PackageManagerInternals).getGitInstallPath(
+				parsed,
+				"project",
+			);
+			mkdirSync(dirname(installedPath), { recursive: true });
+			runGit(tempDir, ["clone", fixture.remote, installedPath]);
+			runGit(installedPath, ["checkout", "v0.4.0"]);
+			settingsManager.setProjectPackages([source]);
+			publishGitVersion(fixture.source, "v0.4.1");
+
+			const updates = await packageManager.checkForAvailableUpdates();
+
+			expect(updates).toEqual([
+				{
+					source,
+					displayName: "github.com/example/repo",
+					type: "git",
 					scope: "project",
 				},
 			]);
