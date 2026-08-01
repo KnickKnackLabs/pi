@@ -73,6 +73,7 @@ export type PackageSource =
 	| string
 	| {
 			source: string;
+			update?: "startup";
 			autoload?: boolean;
 			extensions?: string[];
 			skills?: string[];

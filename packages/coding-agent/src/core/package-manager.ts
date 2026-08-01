@@ -41,6 +41,13 @@ import { canonicalizePath, isLocalPath, markPathIgnoredByCloudSync, resolvePath 
 import { isStdoutTakenOver } from "./output-guard.ts";
 import { type PiManifest, readPiManifest } from "./pi-manifest.ts";
 import type { PackageSource, SettingsManager } from "./settings-manager.ts";
+import { StartupGitPackageUpdater, type StartupPackageUpdateResult } from "./startup-package-update.ts";
+
+export type {
+	StartupPackageUpdatePhase,
+	StartupPackageUpdateResult,
+	StartupPackageUpdateStatus,
+} from "./startup-package-update.ts";
 
 const NETWORK_TIMEOUT_MS = 10000;
 const UPDATE_CHECK_CONCURRENCY = 4;
@@ -107,6 +114,7 @@ export interface ConfiguredPackage {
 
 export interface PackageManager {
 	resolve(onMissing?: (source: string) => Promise<MissingSourceAction>): Promise<ResolvedPaths>;
+	applyStartupUpdates(): Promise<StartupPackageUpdateResult[]>;
 	install(source: string, options?: { local?: boolean }): Promise<void>;
 	installAndPersist(source: string, options?: { local?: boolean }): Promise<void>;
 	remove(source: string, options?: { local?: boolean }): Promise<void>;
@@ -786,6 +794,7 @@ export class DefaultPackageManager implements PackageManager {
 	private cwd: string;
 	private agentDir: string;
 	private settingsManager: SettingsManager;
+	private startupGitUpdater: StartupGitPackageUpdater;
 	private globalNpmRoot: string | undefined;
 	private globalNpmRootCommandKey: string | undefined;
 	private progressCallback: ProgressCallback | undefined;
@@ -794,6 +803,12 @@ export class DefaultPackageManager implements PackageManager {
 		this.cwd = resolvePath(options.cwd);
 		this.agentDir = resolvePath(options.agentDir);
 		this.settingsManager = options.settingsManager;
+		this.startupGitUpdater = new StartupGitPackageUpdater(this.agentDir, {
+			checkoutHasChanges: (path) => this.gitCheckoutHasChanges(path),
+			getHead: (path) => this.getGitHead(path),
+			getRemoteTags: (source, installedPath) => this.getGitSemverTags(source, installedPath, "origin"),
+			prepareCheckout: (source, target, stagingPath) => this.prepareStartupGitCheckout(source, target, stagingPath),
+		});
 	}
 
 	setProgressCallback(callback: ProgressCallback | undefined): void {
@@ -888,22 +903,24 @@ export class DefaultPackageManager implements PackageManager {
 		}
 	}
 
-	async resolve(onMissing?: (source: string) => Promise<MissingSourceAction>): Promise<ResolvedPaths> {
-		const accumulator = this.createAccumulator();
+	private getEffectivePackageSources(): Array<{ pkg: PackageSource; scope: InstalledSourceScope }> {
 		const globalSettings = this.settingsManager.getGlobalSettings();
 		const projectSettings = this.settingsManager.getProjectSettings();
-
-		// Collect all packages with scope (project first so cwd resources win collisions)
-		const allPackages: Array<{ pkg: PackageSource; scope: SourceScope }> = [];
+		const allPackages: Array<{ pkg: PackageSource; scope: InstalledSourceScope }> = [];
 		for (const pkg of projectSettings.packages ?? []) {
 			allPackages.push({ pkg, scope: "project" });
 		}
 		for (const pkg of globalSettings.packages ?? []) {
 			allPackages.push({ pkg, scope: "user" });
 		}
+		return this.dedupePackages(allPackages);
+	}
 
-		// Dedupe: project scope wins over global for same package identity
-		const packageSources = this.dedupePackages(allPackages);
+	async resolve(onMissing?: (source: string) => Promise<MissingSourceAction>): Promise<ResolvedPaths> {
+		const accumulator = this.createAccumulator();
+		const globalSettings = this.settingsManager.getGlobalSettings();
+		const projectSettings = this.settingsManager.getProjectSettings();
+		const packageSources = this.getEffectivePackageSources();
 		await this.resolvePackageSources(packageSources, accumulator, onMissing);
 
 		const globalBaseDir = this.agentDir;
@@ -1033,6 +1050,44 @@ export class DefaultPackageManager implements PackageManager {
 	async removeAndPersist(source: string, options?: { local?: boolean }): Promise<boolean> {
 		await this.remove(source, options);
 		return this.removeSourceFromSettings(source, options);
+	}
+
+	async applyStartupUpdates(): Promise<StartupPackageUpdateResult[]> {
+		const packageSources = this.getEffectivePackageSources();
+		const results: StartupPackageUpdateResult[] = [];
+
+		for (const entry of packageSources) {
+			if (typeof entry.pkg === "string" || entry.pkg.update !== "startup") continue;
+			if (entry.scope === "project" && entry.pkg.autoload === false) continue;
+
+			const source = entry.pkg.source;
+			if (isOfflineModeEnabled()) {
+				results.push({ source, scope: entry.scope, status: "skipped-offline" });
+				continue;
+			}
+
+			const parsed = this.parseSource(source);
+			if (parsed.type !== "git" || !parsed.range) {
+				results.push({
+					source,
+					scope: entry.scope,
+					status: "skipped-ineligible",
+					message: "Startup updates require a Git SemVer range",
+				});
+				continue;
+			}
+
+			results.push(
+				await this.startupGitUpdater.apply({
+					source,
+					gitSource: parsed,
+					scope: entry.scope,
+					installedPath: this.getGitInstallPath(parsed, entry.scope),
+				}),
+			);
+		}
+
+		return results;
 	}
 
 	async update(source?: string): Promise<void> {
@@ -1167,63 +1222,51 @@ export class DefaultPackageManager implements PackageManager {
 			return [];
 		}
 
-		const globalSettings = this.settingsManager.getGlobalSettings();
-		const projectSettings = this.settingsManager.getProjectSettings();
-		const allPackages: Array<{ pkg: PackageSource; scope: SourceScope }> = [];
-		for (const pkg of projectSettings.packages ?? []) {
-			allPackages.push({ pkg, scope: "project" });
-		}
-		for (const pkg of globalSettings.packages ?? []) {
-			allPackages.push({ pkg, scope: "user" });
-		}
+		const packageSources = this.getEffectivePackageSources();
+		const checks = packageSources.map((entry) => async (): Promise<PackageUpdate | undefined> => {
+			if (typeof entry.pkg === "object" && entry.pkg.update === "startup") {
+				return undefined;
+			}
+			const source = typeof entry.pkg === "string" ? entry.pkg : entry.pkg.source;
+			const parsed = this.parseSource(source);
+			if (parsed.type === "local" || parsed.pinned) {
+				return undefined;
+			}
 
-		const packageSources = this.dedupePackages(allPackages);
-		const checks = packageSources
-			.filter(
-				(entry): entry is { pkg: PackageSource; scope: Exclude<SourceScope, "temporary"> } =>
-					entry.scope !== "temporary",
-			)
-			.map((entry) => async (): Promise<PackageUpdate | undefined> => {
-				const source = typeof entry.pkg === "string" ? entry.pkg : entry.pkg.source;
-				const parsed = this.parseSource(source);
-				if (parsed.type === "local" || parsed.pinned) {
-					return undefined;
-				}
-
-				if (parsed.type === "npm") {
-					const installedPath = this.getNpmInstallPath(parsed, entry.scope);
-					if (!existsSync(installedPath)) {
-						return undefined;
-					}
-					const hasUpdate = await this.npmHasAvailableUpdate(parsed, installedPath);
-					if (!hasUpdate) {
-						return undefined;
-					}
-					return {
-						source,
-						displayName: parsed.name,
-						type: "npm",
-						scope: entry.scope,
-					};
-				}
-
-				const installedPath = this.getGitInstallPath(parsed, entry.scope);
+			if (parsed.type === "npm") {
+				const installedPath = this.getNpmInstallPath(parsed, entry.scope);
 				if (!existsSync(installedPath)) {
 					return undefined;
 				}
-				const hasUpdate = parsed.range
-					? await this.gitSemverHasAvailableUpdate(parsed, installedPath)
-					: await this.gitHasAvailableUpdate(installedPath);
+				const hasUpdate = await this.npmHasAvailableUpdate(parsed, installedPath);
 				if (!hasUpdate) {
 					return undefined;
 				}
 				return {
 					source,
-					displayName: `${parsed.host}/${parsed.path}`,
-					type: "git",
+					displayName: parsed.name,
+					type: "npm",
 					scope: entry.scope,
 				};
-			});
+			}
+
+			const installedPath = this.getGitInstallPath(parsed, entry.scope);
+			if (!existsSync(installedPath)) {
+				return undefined;
+			}
+			const hasUpdate = parsed.range
+				? await this.gitSemverHasAvailableUpdate(parsed, installedPath)
+				: await this.gitHasAvailableUpdate(installedPath);
+			if (!hasUpdate) {
+				return undefined;
+			}
+			return {
+				source,
+				displayName: `${parsed.host}/${parsed.path}`,
+				type: "git",
+				scope: entry.scope,
+			};
+		});
 
 		const results = await this.runWithConcurrency(checks, UPDATE_CHECK_CONCURRENCY);
 		return results.filter((result): result is PackageUpdate => result !== undefined);
@@ -1564,10 +1607,14 @@ export class DefaultPackageManager implements PackageManager {
 		}
 	}
 
-	private async getLatestGitSemverTag(source: GitSource, cwd: string, remote: string): Promise<GitSemverTag> {
+	private async getGitSemverTags(source: GitSource, cwd: string, remote: string): Promise<GitSemverTag[]> {
 		if (!source.range) throw new Error("Git package has no SemVer range");
 		const output = await this.runGitRemoteCommand(cwd, ["ls-remote", "--tags", remote]);
-		const selected = selectLatestCompatibleGitTag(parseRemoteGitTags(output), source.range);
+		return parseRemoteGitTags(output);
+	}
+
+	private async getLatestGitSemverTag(source: GitSource, cwd: string, remote: string): Promise<GitSemverTag> {
+		const selected = selectLatestCompatibleGitTag(await this.getGitSemverTags(source, cwd, remote), source.range!);
 		if (!selected) {
 			throw new Error(`No Git tag satisfies ${source.range} for ${source.host}/${source.path}`);
 		}
@@ -1750,10 +1797,10 @@ export class DefaultPackageManager implements PackageManager {
 	 * keep only the project one (project wins). A project entry with autoload=false
 	 * is a delta over the global entry, so both are kept (delta first).
 	 */
-	private dedupePackages(
-		packages: Array<{ pkg: PackageSource; scope: SourceScope }>,
-	): Array<{ pkg: PackageSource; scope: SourceScope }> {
-		const result: Array<{ pkg: PackageSource; scope: SourceScope }> = [];
+	private dedupePackages<TScope extends SourceScope>(
+		packages: Array<{ pkg: PackageSource; scope: TScope }>,
+	): Array<{ pkg: PackageSource; scope: TScope }> {
+		const result: Array<{ pkg: PackageSource; scope: TScope }> = [];
 		const seen = new Map<string, number>();
 		for (const entry of packages) {
 			const identity = this.getPackageIdentity(this.getPackageSourceString(entry.pkg), entry.scope);
@@ -1935,6 +1982,24 @@ export class DefaultPackageManager implements PackageManager {
 	private async updateGitSemverRange(source: GitSource, targetDir: string): Promise<void> {
 		const selectedTag = await this.getLatestGitSemverTag(source, targetDir, "origin");
 		await this.ensureGitTag(targetDir, selectedTag);
+	}
+
+	private async getGitHead(path: string): Promise<string> {
+		return (
+			await this.runCommandCapture("git", ["rev-parse", "HEAD"], {
+				cwd: path,
+				timeoutMs: NETWORK_TIMEOUT_MS,
+			})
+		).trim();
+	}
+
+	private async prepareStartupGitCheckout(
+		source: GitSource,
+		target: GitSemverTag,
+		stagingPath: string,
+	): Promise<void> {
+		await this.runCommand("git", ["clone", source.repo, stagingPath]);
+		await this.ensureGitTag(stagingPath, target, { freshClone: true });
 	}
 
 	private async ensureGitTag(
