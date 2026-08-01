@@ -436,7 +436,14 @@ describe("openai-completions tool_choice", () => {
 	});
 
 	it("respects explicit z.ai tool_stream compat override", async () => {
-		const baseModel = getModel("zai", "glm-5.2")!;
+		const catalogModel = getModel("zai", "glm-5.2")!;
+		const baseModel = {
+			...catalogModel,
+			compat: {
+				...catalogModel.compat,
+				zaiToolStream: false,
+			},
+		} as const;
 		const model = {
 			...baseModel,
 			compat: {
