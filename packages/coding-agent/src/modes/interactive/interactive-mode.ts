@@ -3975,19 +3975,14 @@ export class InteractiveMode {
 				}
 				continue;
 			}
-			const reason =
-				result.status === "refused-dirty"
-					? "checkout has local changes"
-					: result.status === "refused-diverged"
-						? "checkout has local commits or does not match a managed release"
-						: result.status === "deferred-locked"
-							? "another process is updating it"
-							: result.status === "skipped-ineligible"
-								? (result.message ?? "source is not an updateable Git range")
-								: result.status === "failed"
-									? (result.message ?? "update failed")
-									: undefined;
-			const warning = reason ?? result.message;
+			const warningByStatus: Partial<Record<StartupPackageUpdateResult["status"], string>> = {
+				"refused-dirty": "checkout has local changes",
+				"refused-diverged": "checkout has local commits or does not match a managed release",
+				"deferred-locked": "another process is updating it",
+				"skipped-ineligible": result.message ?? "source is not an updateable Git range",
+				failed: result.message ?? "update failed",
+			};
+			const warning = warningByStatus[result.status] ?? result.message;
 			if (warning) {
 				hasWarning = true;
 				lines.push(`${result.source}: ${warning}`);
