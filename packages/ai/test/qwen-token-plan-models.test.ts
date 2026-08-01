@@ -44,7 +44,6 @@ const TEXT_MODELS = [
 	"deepseek-v4-flash",
 	"deepseek-v4-pro",
 	"glm-5",
-	"glm-5.1",
 	"glm-5.2",
 	"kimi-k2.5",
 	"kimi-k2.6",
@@ -63,7 +62,6 @@ const QWEN_THINKING_MODELS = [
 	"deepseek-v4-flash",
 	"deepseek-v4-pro",
 	"glm-5",
-	"glm-5.1",
 	"glm-5.2",
 	"kimi-k2.5",
 	"kimi-k2.6",
@@ -79,7 +77,7 @@ const QWEN_THINKING_MODEL_CASES = (["qwen-token-plan", "qwen-token-plan-cn"] as 
 	QWEN_THINKING_MODELS.map((modelId) => ({ provider, modelId })),
 );
 
-const QWEN_REASONING_EFFORT_MODELS = ["deepseek-v4-flash", "deepseek-v4-pro", "glm-5", "glm-5.1", "glm-5.2"] as const;
+const QWEN_REASONING_EFFORT_MODELS = ["deepseek-v4-flash", "deepseek-v4-pro", "glm-5", "glm-5.2"] as const;
 
 const QWEN_REASONING_EFFORT_MODEL_CASES = (["qwen-token-plan", "qwen-token-plan-cn"] as const).flatMap((provider) =>
 	QWEN_REASONING_EFFORT_MODELS.map((modelId) => ({ provider, modelId })),
