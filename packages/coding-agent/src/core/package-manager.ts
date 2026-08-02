@@ -1058,7 +1058,13 @@ export class DefaultPackageManager implements PackageManager {
 
 		for (const entry of packageSources) {
 			if (typeof entry.pkg === "string" || entry.pkg.update !== "startup") continue;
-			if (entry.scope === "project" && entry.pkg.autoload === false) continue;
+			if (
+				entry.scope === "project" &&
+				entry.pkg.autoload === false &&
+				this.findAutoloadDeltaBase(entry.pkg, entry.scope, packageSources)
+			) {
+				continue;
+			}
 
 			const source = entry.pkg.source;
 			if (isOfflineModeEnabled()) {
