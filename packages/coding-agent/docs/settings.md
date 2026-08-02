@@ -260,13 +260,16 @@ Object form filters which resources to load:
 {
   "packages": [
     {
-      "source": "pi-skills",
+      "source": "git:github.com/example/pi-skills@~1.2.0",
+      "update": "startup",
       "skills": ["brave-search", "transcribe"],
       "extensions": []
     }
   ]
 }
 ```
+
+For Git SemVer ranges, `"update": "startup"` opts the package into a freshness check before resources load. Pi checks at most once every 24 hours, applies a newer compatible tag only to a clean managed checkout, and preserves the existing checkout when offline, dirty, divergent, locked, or when preparation fails. Exact Git refs never move under this policy.
 
 See [packages.md](packages.md) for package management details.
 

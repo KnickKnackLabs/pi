@@ -90,6 +90,7 @@ ssh://git@github.com/user/repo@v1
 - For non-interactive runs (for example CI), you can set `GIT_TERMINAL_PROMPT=0` to disable credential prompts and set `GIT_SSH_COMMAND` (for example `ssh -o BatchMode=yes -o ConnectTimeout=5`) to fail fast.
 - Ordinary refs are pinned tags, branches, or commits. `pi update --extensions` and `pi update --all` do not move them to newer refs, but they do reconcile an existing clone to the configured ref.
 - Explicit `~` and `^` SemVer ranges select Git tags, including `v`-prefixed tags. A clean checkout at a compatible local tag loads without a network request; package updates resolve the newest compatible remote tag while preserving the configured range.
+- An object-form Git SemVer package can set `"update": "startup"`. Before loading resources, Pi checks for a newer compatible tag when its last successful check is at least 24 hours old. It prepares and verifies the replacement separately, then applies it only when the installed checkout is clean and still matches a managed compatible tag. Offline, dirty, divergent, locked, and failed updates preserve the existing checkout.
 - Bare versions such as `@1.2` remain exact Git refs. Use an operator such as `@~1.2.0` to declare a stream.
 - Use `pi install git:host/user/repo@new-ref` to update settings and move an existing package to a new pinned ref.
 - Cloned to `~/.pi/agent/git/<host>/<path>` (global) or `.pi/git/<host>/<path>` (project).
@@ -199,7 +200,8 @@ Filter what a package loads using the object form in settings:
   "packages": [
     "npm:simple-pkg",
     {
-      "source": "npm:my-package",
+      "source": "git:github.com/example/my-package@~1.2.0",
+      "update": "startup",
       "extensions": ["extensions/*.ts", "!extensions/legacy.ts"],
       "skills": [],
       "prompts": ["prompts/review.md"],

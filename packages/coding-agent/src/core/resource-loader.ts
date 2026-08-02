@@ -17,7 +17,12 @@ import {
 } from "./extensions/loader.ts";
 import type { Extension, ExtensionRuntime, InlineExtension, LoadExtensionsResult } from "./extensions/types.ts";
 import { findGitPaths } from "./footer-data-provider.ts";
-import { DefaultPackageManager, type PathMetadata, type ResolvedResource } from "./package-manager.ts";
+import {
+	DefaultPackageManager,
+	type PathMetadata,
+	type ResolvedResource,
+	type StartupPackageUpdateResult,
+} from "./package-manager.ts";
 import type { PromptTemplate } from "./prompt-templates.ts";
 import { loadPromptTemplates } from "./prompt-templates.ts";
 import { SettingsManager } from "./settings-manager.ts";
@@ -46,6 +51,7 @@ export interface ResourceLoader {
 	getSystemPromptSource(): { path: string } | undefined;
 	getAppendSystemPrompt(): string[];
 	getAppendSystemPromptSources(): Array<{ path: string }>;
+	getStartupPackageUpdateResults?(): StartupPackageUpdateResult[];
 	extendResources(paths: ResourceExtensionPaths): void;
 	reload(options?: ResourceLoaderReloadOptions): Promise<void>;
 }
@@ -248,6 +254,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 	private resourceMetadataByPath: Map<string, PathMetadata>;
 	private lastPromptPaths: string[];
 	private lastThemePaths: string[];
+	private startupPackageUpdateResults: StartupPackageUpdateResult[];
 	private loaded: boolean;
 
 	constructor(options: DefaultResourceLoaderOptions) {
@@ -297,6 +304,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 		this.resourceMetadataByPath = new Map();
 		this.lastPromptPaths = [];
 		this.lastThemePaths = [];
+		this.startupPackageUpdateResults = [];
 		this.loaded = false;
 	}
 
@@ -306,6 +314,10 @@ export class DefaultResourceLoader implements ResourceLoader {
 
 	getSkills(): { skills: Skill[]; diagnostics: ResourceDiagnostic[] } {
 		return { skills: this.skills, diagnostics: this.skillDiagnostics };
+	}
+
+	getStartupPackageUpdateResults(): StartupPackageUpdateResult[] {
+		return [...this.startupPackageUpdateResults];
 	}
 
 	getPrompts(): { prompts: PromptTemplate[]; diagnostics: ResourceDiagnostic[] } {
@@ -400,6 +412,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 
 		// reload() preserves SettingsManager.projectTrusted and reloads settings for that trust state.
 		await this.settingsManager.reload();
+		this.startupPackageUpdateResults = await this.packageManager.applyStartupUpdates();
 		const resolvedPaths = await this.packageManager.resolve();
 		const cliExtensionPaths = await this.packageManager.resolveExtensionSources(this.additionalExtensionPaths, {
 			temporary: true,

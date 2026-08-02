@@ -86,7 +86,7 @@ import {
 	resolveModelScope,
 	resolveModelScopeWithDiagnostics,
 } from "../../core/model-resolver.ts";
-import { DefaultPackageManager } from "../../core/package-manager.ts";
+import { DefaultPackageManager, type StartupPackageUpdateResult } from "../../core/package-manager.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
 import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from "../../core/session-manager.ts";
@@ -858,6 +858,7 @@ export class InteractiveMode {
 	 */
 	async run(): Promise<void> {
 		await this.init();
+		this.showStartupPackageUpdateResults(this.session.resourceLoader.getStartupPackageUpdateResults?.() ?? []);
 
 		if (!process.env.PI_OFFLINE) {
 			void this.session.modelRuntime
@@ -3959,6 +3960,43 @@ export class InteractiveMode {
 		}
 		this.chatContainer.addChild(new Text(detailsLine, 1, 0));
 		this.chatContainer.addChild(new DynamicBorder((text) => theme.fg("warning", text)));
+		this.ui.requestRender();
+	}
+
+	showStartupPackageUpdateResults(results: StartupPackageUpdateResult[]): void {
+		const lines: string[] = [];
+		let hasWarning = false;
+		for (const result of results) {
+			if (result.status === "updated") {
+				lines.push(`Updated ${result.source}${result.targetTag ? ` to ${result.targetTag}` : ""}`);
+				if (result.message) {
+					hasWarning = true;
+					lines.push(`  Warning: ${result.message}`);
+				}
+				continue;
+			}
+			const warningByStatus: Partial<Record<StartupPackageUpdateResult["status"], string>> = {
+				"refused-dirty": "checkout has local changes",
+				"refused-diverged": "checkout has local commits or does not match a managed release",
+				"deferred-locked": "another process is updating it",
+				"skipped-ineligible": result.message ?? "source is not an updateable Git range",
+				failed: result.message ?? "update failed",
+			};
+			const warning = warningByStatus[result.status] ?? result.message;
+			if (warning) {
+				hasWarning = true;
+				lines.push(`${result.source}: ${warning}`);
+			}
+		}
+		if (lines.length === 0) return;
+
+		const color = hasWarning ? "warning" : "success";
+		this.chatContainer.addChild(new Spacer(1));
+		this.chatContainer.addChild(new DynamicBorder((text) => theme.fg(color, text)));
+		this.chatContainer.addChild(
+			new Text(`${theme.bold(theme.fg(color, "Package Startup Updates"))}\n${lines.join("\n")}`, 1, 0),
+		);
+		this.chatContainer.addChild(new DynamicBorder((text) => theme.fg(color, text)));
 		this.ui.requestRender();
 	}
 
