@@ -169,6 +169,26 @@ describe("startup package updates", () => {
 		expect(results[0]).toMatchObject({ source: declaration, scope: "user", status: "updated" });
 	});
 
+	it("updates a standalone project package with autoload disabled", async () => {
+		const declaration = "git:github.com/example/repo@~0.4.0";
+		const fixture = createTaggedGitRemote(join(tempDir, "project-autoload-disabled"));
+		const settings = SettingsManager.inMemory();
+		settings.setProjectPackages([
+			{ source: declaration, update: "startup", autoload: false, extensions: ["+extensions/index.ts"] },
+		]);
+		const manager = new DefaultPackageManager({ cwd: projectDir, agentDir, settingsManager: settings });
+		const source = redirectGitSource(manager, declaration, fixture.remote, "example/project-autoload-disabled");
+		const installedPath = cloneInstalledPackage(manager, source, "project", fixture.remote);
+		const targetHead = publishGitVersion(fixture.source, "v0.4.1");
+
+		const results = await manager.applyStartupUpdates();
+
+		expect(results).toEqual([
+			expect.objectContaining({ source: declaration, scope: "project", status: "updated", targetHead }),
+		]);
+		expect(runGit(installedPath, ["rev-parse", "HEAD"])).toBe(targetHead);
+	});
+
 	it("refuses a dirty checkout before changing it", async () => {
 		const declaration = "git:github.com/example/repo@~0.4.0";
 		const fixture = createTaggedGitRemote(join(tempDir, "dirty-update"));
