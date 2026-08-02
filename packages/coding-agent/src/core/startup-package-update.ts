@@ -58,6 +58,10 @@ interface StartupGitPackageUpdateOptions {
 	installedPath: string;
 }
 
+type StartupCheckoutReplacementResult =
+	| { status: "updated"; message?: string }
+	| { status: "refused-dirty" | "refused-diverged" };
+
 function isStateRecord(value: unknown): value is StartupPackageUpdateStateRecord {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
 	const record = value as Record<string, unknown>;
@@ -235,7 +239,11 @@ export class StartupGitPackageUpdater {
 			};
 		}
 
-		let message = await this.replaceCheckout(gitSource, installedPath, target);
+		const replacement = await this.replaceCheckout(gitSource, installedPath, previousHead, target);
+		if (replacement.status !== "updated") {
+			return { source, scope, status: replacement.status, phase: "classify", previousHead };
+		}
+		let message = replacement.message;
 		const stateMessage = this.writeState(source, scope, target, checkedAt);
 		if (stateMessage) message = appendMessage(message, stateMessage);
 		return {
@@ -267,8 +275,9 @@ export class StartupGitPackageUpdater {
 	private async replaceCheckout(
 		source: GitSource,
 		installedPath: string,
+		expectedHead: string,
 		target: GitSemverTag,
-	): Promise<string | undefined> {
+	): Promise<StartupCheckoutReplacementResult> {
 		const parent = dirname(installedPath);
 		const base = basename(installedPath);
 		const stagingPath = join(parent, `.${base}.startup-stage-${randomUUID()}`);
@@ -284,6 +293,12 @@ export class StartupGitPackageUpdater {
 				throw new Error(`Prepared Git package did not verify at ${target.name}`);
 			}
 
+			phase = "classify";
+			const currentDirty = await this.operations.checkoutHasChanges(installedPath);
+			const currentHead = await this.operations.getHead(installedPath);
+			if (currentDirty) return { status: "refused-dirty" };
+			if (currentHead !== expectedHead) return { status: "refused-diverged" };
+
 			phase = "apply";
 			// Update writers are locked and staging is complete, but these rollback-capable renames are not
 			// atomic for readers. Removing that brief path transition requires a versioned checkout pointer.
@@ -295,10 +310,13 @@ export class StartupGitPackageUpdater {
 			try {
 				rmSync(backupPath, { recursive: true, force: true });
 				originalMoved = false;
-				return undefined;
+				return { status: "updated" };
 			} catch (error) {
 				originalMoved = false;
-				return `Package updated, but its backup at ${backupPath} could not be removed: ${describeError(error)}`;
+				return {
+					status: "updated",
+					message: `Package updated, but its backup at ${backupPath} could not be removed: ${describeError(error)}`,
+				};
 			}
 		} catch (error) {
 			if (originalMoved && !replacementInstalled) {

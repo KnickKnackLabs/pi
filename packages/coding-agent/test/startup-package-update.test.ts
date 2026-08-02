@@ -189,6 +189,57 @@ describe("startup package updates", () => {
 		expect(readFileSync(join(installedPath, "extensions", "index.ts"), "utf-8")).toBe("local work\n");
 	});
 
+	it("preserves worktree changes made while the replacement is prepared", async () => {
+		const declaration = "git:github.com/example/repo@~0.4.0";
+		const fixture = createTaggedGitRemote(join(tempDir, "dirty-during-prepare"));
+		const settings = SettingsManager.inMemory({ packages: [{ source: declaration, update: "startup" }] });
+		const manager = new DefaultPackageManager({ cwd: projectDir, agentDir, settingsManager: settings });
+		const source = redirectGitSource(manager, declaration, fixture.remote, "example/dirty-during-prepare");
+		const installedPath = cloneInstalledPackage(manager, source, "user", fixture.remote);
+		const originalHead = runGit(installedPath, ["rev-parse", "HEAD"]);
+		publishGitVersion(fixture.source, "v0.4.1");
+		vi.spyOn(manager as unknown as PackageManagerInternals, "installGitDependencies").mockImplementation(async () => {
+			writeFileSync(join(installedPath, "extensions", "index.ts"), "local work during preparation\n");
+		});
+
+		const results = await manager.applyStartupUpdates();
+
+		expect(results).toEqual([
+			expect.objectContaining({ source: declaration, scope: "user", status: "refused-dirty", phase: "classify" }),
+		]);
+		expect(runGit(installedPath, ["rev-parse", "HEAD"])).toBe(originalHead);
+		expect(readFileSync(join(installedPath, "extensions", "index.ts"), "utf-8")).toBe(
+			"local work during preparation\n",
+		);
+	});
+
+	it("preserves a local commit made while the replacement is prepared", async () => {
+		const declaration = "git:github.com/example/repo@~0.4.0";
+		const fixture = createTaggedGitRemote(join(tempDir, "commit-during-prepare"));
+		const settings = SettingsManager.inMemory({ packages: [{ source: declaration, update: "startup" }] });
+		const manager = new DefaultPackageManager({ cwd: projectDir, agentDir, settingsManager: settings });
+		const source = redirectGitSource(manager, declaration, fixture.remote, "example/commit-during-prepare");
+		const installedPath = cloneInstalledPackage(manager, source, "user", fixture.remote);
+		publishGitVersion(fixture.source, "v0.4.1");
+		let localHead: string | undefined;
+		vi.spyOn(manager as unknown as PackageManagerInternals, "installGitDependencies").mockImplementation(async () => {
+			runGit(installedPath, ["config", "user.name", "Pi Test"]);
+			runGit(installedPath, ["config", "user.email", "pi-test@example.com"]);
+			writeFileSync(join(installedPath, "local.txt"), "preserve me\n");
+			runGit(installedPath, ["add", "local.txt"]);
+			runGit(installedPath, ["commit", "-m", "local commit during preparation"]);
+			localHead = runGit(installedPath, ["rev-parse", "HEAD"]);
+		});
+
+		const results = await manager.applyStartupUpdates();
+
+		expect(results).toEqual([
+			expect.objectContaining({ source: declaration, scope: "user", status: "refused-diverged", phase: "classify" }),
+		]);
+		expect(runGit(installedPath, ["rev-parse", "HEAD"])).toBe(localHead);
+		expect(readFileSync(join(installedPath, "local.txt"), "utf-8")).toBe("preserve me\n");
+	});
+
 	it("refuses a clean checkout with a local commit", async () => {
 		const declaration = "git:github.com/example/repo@~0.4.0";
 		const fixture = createTaggedGitRemote(join(tempDir, "ahead-update"));
