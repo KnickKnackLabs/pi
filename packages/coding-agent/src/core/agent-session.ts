@@ -3036,7 +3036,7 @@ export class AgentSession {
 		targetId: string,
 		options: AgentSessionNavigateTreeOptions = {},
 	): Promise<{ editorText?: string; cancelled: boolean; aborted?: boolean; summaryEntry?: BranchSummaryEntry }> {
-		if (this.isStreaming) {
+		if (this.agent.state.isStreaming) {
 			throw new Error("Wait for the current response to finish before navigating the session tree.");
 		}
 
