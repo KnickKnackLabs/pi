@@ -666,6 +666,35 @@ describe("ExtensionRunner", () => {
 			expect(missing).toBeUndefined();
 		});
 
+		it("gets role-specific built-in message renderer transforms in extension load order", async () => {
+			fs.writeFileSync(
+				path.join(extensionsDir, "renderer-a.ts"),
+				`export default function(pi) {
+	pi.registerBuiltInMessageRenderer("user", (current) => current);
+	pi.registerBuiltInMessageRenderer("assistant", (current) => current);
+}`,
+			);
+			fs.writeFileSync(
+				path.join(extensionsDir, "renderer-b.ts"),
+				`export default function(pi) {
+	pi.registerBuiltInMessageRenderer("user", (current) => current);
+}`,
+			);
+
+			const result = await discoverAndLoadExtensions([], tempDir, tempDir);
+			const runner = new ExtensionRunner(result.extensions, result.runtime, tempDir, sessionManager, modelRegistry);
+
+			const userTransforms = runner.getBuiltInMessageRendererTransforms("user");
+			const firstUserRegistration = result.extensions[0].builtInMessageRendererTransforms?.find(
+				(registration) => registration.role === "user",
+			);
+			const secondUserRegistration = result.extensions[1].builtInMessageRendererTransforms?.find(
+				(registration) => registration.role === "user",
+			);
+			expect(userTransforms).toEqual([firstUserRegistration?.transform, secondUserRegistration?.transform]);
+			expect(runner.getBuiltInMessageRendererTransforms("assistant")).toHaveLength(1);
+		});
+
 		it("gets entry renderer by type", async () => {
 			const extCode = `
 				export default function(pi) {

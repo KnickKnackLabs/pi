@@ -17,6 +17,8 @@ import type {
 	BeforeAgentStartEventResult,
 	BeforeProviderHeadersEvent,
 	BeforeProviderRequestEvent,
+	BuiltInMessageRendererTransform,
+	BuiltInMessageRole,
 	CompactOptions,
 	ContextEvent,
 	ContextEventResult,
@@ -596,6 +598,16 @@ export class ExtensionRunner {
 			}
 		}
 		return undefined;
+	}
+
+	getBuiltInMessageRendererTransforms<Role extends BuiltInMessageRole>(
+		role: Role,
+	): BuiltInMessageRendererTransform<Role>[] {
+		return this.extensions.flatMap((extension) =>
+			(extension.builtInMessageRendererTransforms ?? [])
+				.filter((registration) => registration.role === role)
+				.map((registration) => registration.transform as unknown as BuiltInMessageRendererTransform<Role>),
+		);
 	}
 
 	getMarkdownTransformers(): MarkdownTransformer[] {

@@ -1,4 +1,5 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
+import { Container, Text } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "vitest";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.ts";
 import { UserMessageComponent } from "../src/modes/interactive/components/user-message.ts";
@@ -225,6 +226,46 @@ describe("AssistantMessageComponent", () => {
 		expect(message.content).toEqual([
 			{ type: "text", text: "answer" },
 			{ type: "thinking", thinking: "reasoning" },
+		]);
+	});
+
+	test("passes streaming and expanded state through assistant renderer transforms", () => {
+		initTheme("dark");
+		const message = createAssistantMessage([{ type: "text", text: "partial" }]);
+		const calls: Array<{ message: AssistantMessage; expanded: boolean; outputPad: number; isStreaming: boolean }> =
+			[];
+		let compositions = 0;
+		const component = new AssistantMessageComponent(
+			undefined,
+			false,
+			undefined,
+			"Thinking...",
+			2,
+			[],
+			[
+				(current) => {
+					compositions++;
+					return (currentMessage, options, theme) => {
+						calls.push({ message: currentMessage, ...options });
+						const fallback = current(currentMessage, { ...options, outputPad: 0 }, theme);
+						const content = new Container();
+						content.addChild(new Text("metadata", 0, 0));
+						content.addChild(fallback.component);
+						return { component: content, renderShell: "self" };
+					};
+				},
+			],
+		);
+
+		component.setExpanded(true);
+		component.updateContent(message, true);
+		expect(stripAnsi(component.render(80).join("\n"))).toContain("metadata");
+		component.updateContent(message, false);
+
+		expect(compositions).toBe(1);
+		expect(calls).toEqual([
+			{ message, expanded: true, outputPad: 2, isStreaming: true },
+			{ message, expanded: true, outputPad: 2, isStreaming: false },
 		]);
 	});
 
