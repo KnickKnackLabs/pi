@@ -52,6 +52,16 @@ export function composeBuiltInMessageRenderer<Role extends BuiltInMessageRole>(
 	}
 
 	const composed = renderer;
-	return (message, options, theme) =>
-		tryRender(composed, message, options, theme) ?? fallback(message, options, theme);
+	if (composed === fallback) return fallback;
+
+	return (message, options, theme) => {
+		// Renderer transforms receive a snapshot so display code cannot mutate session or model state.
+		let isolatedMessage: BuiltInMessageByRole[Role];
+		try {
+			isolatedMessage = structuredClone(message);
+		} catch {
+			return fallback(message, options, theme);
+		}
+		return tryRender(composed, isolatedMessage, options, theme) ?? fallback(message, options, theme);
+	};
 }
