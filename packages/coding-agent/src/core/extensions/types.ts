@@ -1224,6 +1224,39 @@ export type MessageRenderer<T = unknown> = (
 	theme: Theme,
 ) => Component | undefined;
 
+export type BuiltInMessageRole = "user" | "assistant";
+
+export interface BuiltInMessageByRole {
+	user: Extract<AgentMessage, { role: "user" }>;
+	assistant: Extract<AgentMessage, { role: "assistant" }>;
+}
+
+export interface BuiltInMessageRenderOptions extends MessageRenderOptions {
+	isStreaming: boolean;
+}
+
+export type BuiltInMessageRenderShell = "default" | "self";
+
+export interface BuiltInMessageRenderResult {
+	component: Component;
+	renderShell: BuiltInMessageRenderShell;
+}
+
+export type BuiltInMessageRenderer<Role extends BuiltInMessageRole> = (
+	message: BuiltInMessageByRole[Role],
+	options: BuiltInMessageRenderOptions,
+	theme: Theme,
+) => BuiltInMessageRenderResult;
+
+export type BuiltInMessageRendererTransform<Role extends BuiltInMessageRole> = (
+	renderer: BuiltInMessageRenderer<Role>,
+) => BuiltInMessageRenderer<Role>;
+
+export interface RegisteredBuiltInMessageRendererTransform {
+	role: BuiltInMessageRole;
+	transform: BuiltInMessageRendererTransform<BuiltInMessageRole>;
+}
+
 export type EntryRenderer<T = unknown> = (
 	entry: CustomEntry<T>,
 	options: EntryRenderOptions,
@@ -1356,6 +1389,12 @@ export interface ExtensionAPI {
 
 	/** Register a custom renderer for CustomMessageEntry. */
 	registerMessageRenderer<T = unknown>(customType: string, renderer: MessageRenderer<T>): void;
+
+	/** Wrap Pi's built-in renderer for user or assistant transcript messages. */
+	registerBuiltInMessageRenderer<Role extends BuiltInMessageRole>(
+		role: Role,
+		transform: BuiltInMessageRendererTransform<Role>,
+	): void;
 
 	/** Register a transformer for user and assistant Markdown before Pi renders it in the interactive transcript. */
 	registerMarkdownTransformer(transformer: MarkdownTransformer): void;
@@ -1776,6 +1815,7 @@ export interface Extension {
 	tools: Map<string, RegisteredTool>;
 	toolTransforms?: RegisteredToolTransform[];
 	messageRenderers: Map<string, MessageRenderer>;
+	builtInMessageRendererTransforms?: RegisteredBuiltInMessageRendererTransform[];
 	markdownTransformer?: MarkdownTransformer;
 	entryRenderers?: Map<string, EntryRenderer>;
 	commands: Map<string, RegisteredCommand>;

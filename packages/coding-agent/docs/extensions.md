@@ -1645,6 +1645,28 @@ mode and would not execute if sent via `prompt`.
 
 Register a custom TUI renderer for custom messages with your `customType`. Custom messages are created with `pi.sendMessage()` and participate in LLM context. See [Custom UI](#custom-ui).
 
+### pi.registerBuiltInMessageRenderer(role, transform)
+
+Wrap Pi's configured transcript renderer for built-in `"user"` or `"assistant"` messages. The transform receives the current renderer and returns another synchronous renderer. Several transforms compose in extension load order, with later transforms wrapping earlier ones.
+
+Each renderer receives the complete message, the current theme, and `{ expanded, outputPad, isStreaming }`. Calling the current renderer preserves Pi's native Markdown, thinking, error, and extension-transform behavior:
+
+```typescript
+pi.registerBuiltInMessageRenderer("assistant", (current) => {
+  return (message, options, theme) => {
+    const rendered = current(message, options, theme);
+    // Wrap rendered.component or replace it.
+    return rendered;
+  };
+});
+```
+
+Return `{ component, renderShell: "default" }` to keep Pi's role-specific visual shell, or `renderShell: "self"` when the returned component owns its card background and padding. Pi retains the transcript-level lifecycle and terminal integration in either mode.
+
+The hook is display-only. It does not modify persisted messages or model context. Pi invokes it for new, streaming, restored, and expansion-toggled transcript content; the returned component receives normal `render(width)` calls when the terminal resizes. Keep renderers synchronous and inexpensive. If a transform throws or returns an invalid result, Pi falls back to the previous renderer layer.
+
+See [built-in-message-renderer.ts](../examples/extensions/built-in-message-renderer.ts) for a complete wrapping example.
+
 ### pi.registerMarkdownTransformer(transformer)
 
 Register a transformer for the Markdown in normal user text, assistant text, and thinking blocks. Transformers run in extension load order, and each transformer receives the Markdown returned by the previous transformer. After the chain finishes, Pi renders the transformed content with its built-in renderer.
@@ -2913,6 +2935,8 @@ See [tui.md](tui.md) Pattern 7 for a complete example with mode indicator.
 
 ### Message and Entry Rendering
 
+Use `pi.registerBuiltInMessageRenderer()` to wrap the native user or assistant transcript component without changing the message stored in the session or sent to the model. The current renderer can be delegated to, padded differently, or placed inside a component-owned card. See [built-in-message-renderer.ts](../examples/extensions/built-in-message-renderer.ts).
+
 Register a custom renderer for messages with your `customType`. Use message renderers for content that should participate in LLM context:
 
 ```typescript
@@ -3048,6 +3072,7 @@ All examples in [examples/extensions/](../examples/extensions/).
 | **UI Components** |||
 | `status-line.ts` | Footer status indicator | `setStatus`, session events |
 | `working-indicator.ts` | Customize the streaming working indicator | `setWorkingIndicator`, `registerCommand` |
+| `built-in-message-renderer.ts` | Wrap native user and assistant transcript cards | `registerBuiltInMessageRenderer` |
 | `github-issue-autocomplete.ts` | Add `#1234` issue completions on top of built-in autocomplete by preloading recent open issues from `gh issue list` | `addAutocompleteProvider`, `on("session_start")`, `exec` |
 | `custom-footer.ts` | Replace footer entirely | `registerCommand`, `setFooter` |
 | `custom-header.ts` | Replace startup header | `on("session_start")`, `setHeader` |

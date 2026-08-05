@@ -33,6 +33,8 @@ import { readPiManifest } from "../pi-manifest.ts";
 import { createSyntheticSourceInfo } from "../source-info.ts";
 import { time } from "../timings.ts";
 import type {
+	BuiltInMessageRendererTransform,
+	BuiltInMessageRole,
 	EntryRenderer,
 	Extension,
 	ExtensionAPI,
@@ -305,6 +307,18 @@ function createExtensionAPI(
 		registerMessageRenderer<T>(customType: string, renderer: MessageRenderer<T>): void {
 			runtime.assertActive();
 			extension.messageRenderers.set(customType, renderer as MessageRenderer);
+		},
+
+		registerBuiltInMessageRenderer<Role extends BuiltInMessageRole>(
+			role: Role,
+			transform: BuiltInMessageRendererTransform<Role>,
+		): void {
+			runtime.assertActive();
+			extension.builtInMessageRendererTransforms ??= [];
+			extension.builtInMessageRendererTransforms.push({
+				role,
+				transform: transform as unknown as BuiltInMessageRendererTransform<BuiltInMessageRole>,
+			});
 		},
 
 		registerMarkdownTransformer(transformer: MarkdownTransformer): void {

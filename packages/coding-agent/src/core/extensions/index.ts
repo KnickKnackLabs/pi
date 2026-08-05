@@ -41,6 +41,13 @@ export type {
 	BeforeProviderRequestEvent,
 	BeforeProviderRequestEventResult,
 	BuildSystemPromptOptions,
+	BuiltInMessageByRole,
+	BuiltInMessageRenderer,
+	BuiltInMessageRendererTransform,
+	BuiltInMessageRenderOptions,
+	BuiltInMessageRenderResult,
+	BuiltInMessageRenderShell,
+	BuiltInMessageRole,
 	BuiltInToolDefinitions,
 	// Context
 	CompactOptions,

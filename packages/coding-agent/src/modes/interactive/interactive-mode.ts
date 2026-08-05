@@ -2959,7 +2959,9 @@ export class InteractiveMode {
 						this.hiddenThinkingLabel,
 						this.outputPad,
 						this.getMarkdownTransformers(),
+						this.session.extensionRunner.getBuiltInMessageRendererTransforms("assistant"),
 					);
+					this.streamingComponent.setExpanded(this.toolOutputExpanded);
 					this.streamingMessage = event.message;
 					this.chatContainer.addChild(this.streamingComponent);
 					this.streamingComponent.updateContent(this.streamingMessage, true);
@@ -3342,7 +3344,10 @@ export class InteractiveMode {
 								this.getMarkdownThemeWithSettings(),
 								this.outputPad,
 								this.getMarkdownTransformers(),
+								this.session.extensionRunner.getBuiltInMessageRendererTransforms("user"),
+								message,
 							);
+							userComponent.setExpanded(this.toolOutputExpanded);
 							this.chatContainer.addChild(userComponent);
 						}
 					} else {
@@ -3351,7 +3356,10 @@ export class InteractiveMode {
 							this.getMarkdownThemeWithSettings(),
 							this.outputPad,
 							this.getMarkdownTransformers(),
+							this.session.extensionRunner.getBuiltInMessageRendererTransforms("user"),
+							message,
 						);
+						userComponent.setExpanded(this.toolOutputExpanded);
 						this.chatContainer.addChild(userComponent);
 					}
 					if (options?.populateHistory) {
@@ -3368,7 +3376,9 @@ export class InteractiveMode {
 					this.hiddenThinkingLabel,
 					this.outputPad,
 					this.getMarkdownTransformers(),
+					this.session.extensionRunner.getBuiltInMessageRendererTransforms("assistant"),
 				);
+				assistantComponent.setExpanded(this.toolOutputExpanded);
 				this.chatContainer.addChild(assistantComponent);
 				break;
 			}
