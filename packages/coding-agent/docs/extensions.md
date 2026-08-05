@@ -1649,7 +1649,7 @@ Register a custom TUI renderer for custom messages with your `customType`. Custo
 
 Wrap Pi's configured transcript renderer for built-in `"user"` or `"assistant"` messages. The transform receives the current renderer and returns another synchronous renderer. Several transforms compose in extension load order, with later transforms wrapping earlier ones.
 
-Each renderer receives the complete message, the current theme, and `{ expanded, outputPad, isStreaming }`. Calling the current renderer preserves Pi's native Markdown, thinking, error, and extension-transform behavior:
+Each renderer receives the complete message, the current theme, and `{ expanded, outputPad, isStreaming }`. The message is an isolated snapshot, so mutations affect only the current render chain and cannot change the session or model context. Calling the current renderer preserves Pi's native Markdown, thinking, error, and extension-transform behavior:
 
 ```typescript
 pi.registerBuiltInMessageRenderer("assistant", (current) => {
