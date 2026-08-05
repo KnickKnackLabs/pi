@@ -54,6 +54,35 @@ describe("composeBuiltInMessageRenderer", () => {
 		expect(result.renderShell).toBe("default");
 	});
 
+	test("isolates the source message from transform mutations", () => {
+		initTheme("dark");
+		const source: UserMessage = {
+			role: "user",
+			content: [{ type: "text", text: "original" }],
+			timestamp: 1,
+		};
+		const fallback: BuiltInMessageRenderer<"user"> = (currentMessage) => {
+			const text =
+				typeof currentMessage.content === "string"
+					? currentMessage.content
+					: (currentMessage.content.find((content) => content.type === "text")?.text ?? "");
+			return { component: new Text(text, 0, 0), renderShell: "default" };
+		};
+		const mutateNestedContent: BuiltInMessageRendererTransform<"user"> =
+			(current) => (currentMessage, currentOptions, currentTheme) => {
+				if (typeof currentMessage.content !== "string" && currentMessage.content[0].type === "text") {
+					currentMessage.content[0].text = "mutated";
+				}
+				return current(currentMessage, currentOptions, currentTheme);
+			};
+
+		const renderer = composeBuiltInMessageRenderer(fallback, [mutateNestedContent]);
+		const result = renderer(source, options, theme);
+
+		expect(result.component.render(40).map((line) => stripAnsi(line).trimEnd())).toEqual(["mutated"]);
+		expect(source.content).toEqual([{ type: "text", text: "original" }]);
+	});
+
 	test("keeps later transforms when an earlier transform throws during registration", () => {
 		initTheme("dark");
 		const trace: string[] = [];
