@@ -79,6 +79,19 @@ describe("InteractiveMode turn boundaries", () => {
 		expect(fakeMode.chatContainer.children[1]).toBeInstanceOf(Spacer);
 	});
 
+	test("does not invoke the boundary hook for the first user message after non-user content", () => {
+		initTheme("dark");
+		const contexts: TurnBoundaryContext[] = [];
+		const fakeMode = createFakeMode(contexts);
+		fakeMode.chatContainer.addChild(new Text("notice", 0, 0));
+
+		addMessageToChat.call(fakeMode, userMessage("first", 1), { source: "interactive", isReplay: false });
+
+		expect(contexts).toEqual([]);
+		expect(fakeMode.chatContainer.children).toHaveLength(3);
+		expect(fakeMode.chatContainer.children[1]).toBeInstanceOf(Spacer);
+	});
+
 	test("invokes the outer boundary for replayed skill user turns", () => {
 		initTheme("dark");
 		const contexts: TurnBoundaryContext[] = [];

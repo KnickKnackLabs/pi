@@ -3348,7 +3348,13 @@ export class InteractiveMode {
 				const textContent = this.getUserMessageText(message);
 				if (textContent) {
 					if (this.chatContainer.children.length > 0) {
-						this.chatContainer.addChild(this.createTurnBoundary(message, options));
+						const hasRenderedUserMessage = this.chatContainer.children.some(
+							(child) =>
+								child instanceof UserMessageComponent || child instanceof SkillInvocationMessageComponent,
+						);
+						this.chatContainer.addChild(
+							hasRenderedUserMessage ? this.createTurnBoundary(message, options) : new Spacer(1),
+						);
 					}
 					const skillBlock = parseSkillBlock(textContent);
 					if (skillBlock) {
