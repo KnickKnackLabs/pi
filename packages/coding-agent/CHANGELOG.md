@@ -8,6 +8,7 @@
 - Added `ctx.queueCommand()` so extension tools and event handlers can queue real extension commands to run after the current agent turn with command-context capabilities. Commands that can invalidate later queued work can opt into terminal queue semantics.
 - Added exact branch-summary support to `ctx.navigateTree()` so extensions can attach a supplied summary without invoking model summarization.
 - Added chainable `pi.registerMarkdownTransformer()` hooks for display-only transformation of user and assistant Markdown.
+- Added chainable `pi.registerTurnBoundaryRenderer()` hooks for customizing the visual boundary before user turns.
 - Added `--alt` to run interactive mode with the alternate-screen TUI ([#7304](https://github.com/earendil-works/pi/issues/7304)).
 
 ### Fixed
