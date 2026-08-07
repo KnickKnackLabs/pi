@@ -1257,6 +1257,20 @@ export interface RegisteredBuiltInMessageRendererTransform {
 	transform: BuiltInMessageRendererTransform<BuiltInMessageRole>;
 }
 
+export interface TurnBoundaryContext {
+	message: BuiltInMessageByRole["user"];
+	source?: InputSource;
+	isReplay: boolean;
+}
+
+export type TurnBoundaryRenderer = (context: TurnBoundaryContext, theme: Theme) => Component;
+
+export type TurnBoundaryRendererTransform = (renderer: TurnBoundaryRenderer) => TurnBoundaryRenderer;
+
+export interface RegisteredTurnBoundaryRendererTransform {
+	transform: TurnBoundaryRendererTransform;
+}
+
 export type EntryRenderer<T = unknown> = (
 	entry: CustomEntry<T>,
 	options: EntryRenderOptions,
@@ -1395,6 +1409,9 @@ export interface ExtensionAPI {
 		role: Role,
 		transform: BuiltInMessageRendererTransform<Role>,
 	): void;
+
+	/** Wrap the visual boundary Pi inserts before each user turn after the first. */
+	registerTurnBoundaryRenderer(transform: TurnBoundaryRendererTransform): void;
 
 	/** Register a transformer for user and assistant Markdown before Pi renders it in the interactive transcript. */
 	registerMarkdownTransformer(transformer: MarkdownTransformer): void;
@@ -1816,6 +1833,7 @@ export interface Extension {
 	toolTransforms?: RegisteredToolTransform[];
 	messageRenderers: Map<string, MessageRenderer>;
 	builtInMessageRendererTransforms?: RegisteredBuiltInMessageRendererTransform[];
+	turnBoundaryRendererTransforms?: RegisteredTurnBoundaryRendererTransform[];
 	markdownTransformer?: MarkdownTransformer;
 	entryRenderers?: Map<string, EntryRenderer>;
 	commands: Map<string, RegisteredCommand>;

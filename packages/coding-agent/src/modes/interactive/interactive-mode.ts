@@ -72,6 +72,7 @@ import type {
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
 	ExtensionWidgetOptions,
+	InputSource,
 	MarkdownTransformer,
 	ProjectTrustContext,
 	WorkingIndicatorOptions,
@@ -145,6 +146,7 @@ import {
 import { ToolExecutionComponent } from "./components/tool-execution.ts";
 import { TreeSelectorComponent } from "./components/tree-selector.ts";
 import { TrustSelectorComponent } from "./components/trust-selector.ts";
+import { composeTurnBoundaryRenderer } from "./components/turn-boundary-renderer.ts";
 import { UserMessageComponent } from "./components/user-message.ts";
 import { UserMessageSelectorComponent } from "./components/user-message-selector.ts";
 import { editInExternalEditor } from "./external-editor.ts";
@@ -2948,7 +2950,7 @@ export class InteractiveMode {
 					this.addMessageToChat(event.message);
 					this.ui.requestRender();
 				} else if (event.message.role === "user") {
-					this.addMessageToChat(event.message);
+					this.addMessageToChat(event.message, { source: event.source, isReplay: false });
 					this.updatePendingMessagesDisplay();
 					this.ui.requestRender();
 				} else if (event.message.role === "assistant") {
@@ -3277,7 +3279,10 @@ export class InteractiveMode {
 		this.chatContainer.addChild(component);
 	}
 
-	private addMessageToChat(message: AgentMessage, options?: { populateHistory?: boolean }): void {
+	private addMessageToChat(
+		message: AgentMessage,
+		options?: { populateHistory?: boolean; source?: InputSource; isReplay?: boolean },
+	): void {
 		switch (message.role) {
 			case "bashExecution": {
 				const component = new BashExecutionComponent(message.command, this.ui, message.excludeFromContext);
@@ -3325,7 +3330,20 @@ export class InteractiveMode {
 				const textContent = this.getUserMessageText(message);
 				if (textContent) {
 					if (this.chatContainer.children.length > 0) {
-						this.chatContainer.addChild(new Spacer(1));
+						const renderBoundary = composeTurnBoundaryRenderer(
+							() => new Spacer(1),
+							this.session.extensionRunner.getTurnBoundaryRendererTransforms(),
+						);
+						this.chatContainer.addChild(
+							renderBoundary(
+								{
+									message,
+									source: options?.source,
+									isReplay: options?.isReplay ?? false,
+								},
+								theme,
+							),
+						);
 					}
 					const skillBlock = parseSkillBlock(textContent);
 					if (skillBlock) {
@@ -3394,7 +3412,7 @@ export class InteractiveMode {
 
 	private renderSessionItems(
 		items: readonly RenderSessionItem[],
-		options: { updateFooter?: boolean; populateHistory?: boolean } = {},
+		options: { updateFooter?: boolean; populateHistory?: boolean; isReplay?: boolean } = {},
 	): void {
 		this.pendingTools.clear();
 		const renderedPendingTools = new Map<string, ToolExecutionComponent>();
@@ -3493,7 +3511,7 @@ export class InteractiveMode {
 			}
 			return sessionEntryToContextMessages(entry);
 		});
-		this.renderSessionItems(items, options);
+		this.renderSessionItems(items, { ...options, isReplay: true });
 	}
 
 	/**

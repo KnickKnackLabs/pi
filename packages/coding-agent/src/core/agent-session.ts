@@ -145,7 +145,12 @@ export function parseSkillBlock(text: string): ParsedSkillBlock | null {
 
 /** Session-specific events that extend the core AgentEvent */
 export type AgentSessionEvent =
-	| Exclude<AgentEvent, { type: "agent_end" }>
+	| Exclude<AgentEvent, { type: "agent_end" | "message_start" }>
+	| {
+			type: "message_start";
+			message: AgentMessage;
+			source?: InputSource;
+	  }
 	| {
 			type: "agent_end";
 			messages: AgentMessage[];
@@ -324,6 +329,7 @@ export class AgentSession {
 	// Event subscription state
 	private _unsubscribeAgent?: () => void;
 	private _eventListeners: AgentSessionEventListener[] = [];
+	private _inputSources = new WeakMap<AgentMessage, InputSource>();
 	private _isAgentRunActive = false;
 	private _pendingExtensionMessageActions = 0;
 	private _idleWaitPromise: Promise<void> | undefined;
@@ -637,8 +643,21 @@ export class AgentSession {
 		// Emit to extensions first
 		await this._emitExtensionEvent(event);
 
+		let sessionEvent: AgentSessionEvent;
+		if (event.type === "message_start") {
+			const source = event.message.role === "user" ? this._inputSources.get(event.message) : undefined;
+			if (event.message.role === "user") {
+				this._inputSources.delete(event.message);
+			}
+			sessionEvent = { ...event, source };
+		} else if (event.type === "agent_end") {
+			sessionEvent = { ...event, willRetry: this._willRetryAfterAgentEnd(event) };
+		} else {
+			sessionEvent = event;
+		}
+
 		// Notify all listeners
-		this._emit(event.type === "agent_end" ? { ...event, willRetry: this._willRetryAfterAgentEnd(event) } : event);
+		this._emit(sessionEvent);
 
 		// Handle session persistence
 		if (event.type === "message_end") {
@@ -1140,6 +1159,7 @@ export class AgentSession {
 	async prompt(text: string, options?: PromptOptions): Promise<void> {
 		const expandPromptTemplates = options?.expandPromptTemplates ?? true;
 		const preflightResult = options?.preflightResult;
+		const inputSource = options?.source ?? "interactive";
 		let messages: AgentMessage[] | undefined;
 
 		try {
@@ -1161,7 +1181,7 @@ export class AgentSession {
 				const inputResult = await this._extensionRunner.emitInput(
 					currentText,
 					currentImages,
-					options?.source ?? "interactive",
+					inputSource,
 					this.isStreaming ? options?.streamingBehavior : undefined,
 				);
 				if (inputResult.action === "handled") {
@@ -1189,9 +1209,9 @@ export class AgentSession {
 					);
 				}
 				if (options.streamingBehavior === "followUp") {
-					await this._queueFollowUp(expandedText, currentImages);
+					await this._queueFollowUp(expandedText, currentImages, inputSource);
 				} else {
-					await this._queueSteer(expandedText, currentImages);
+					await this._queueSteer(expandedText, currentImages, inputSource);
 				}
 				preflightResult?.(true);
 				return;
@@ -1287,7 +1307,17 @@ export class AgentSession {
 		}
 
 		preflightResult?.(true);
-		await this._runAgentPrompt(messages);
+		const userMessage = messages.find((message) => message.role === "user");
+		if (userMessage) {
+			this._inputSources.set(userMessage, inputSource);
+		}
+		try {
+			await this._runAgentPrompt(messages);
+		} finally {
+			if (userMessage) {
+				this._inputSources.delete(userMessage);
+			}
+		}
 	}
 
 	queueCommand(command: string, args = "", options?: QueueCommandOptions): void {
@@ -1475,35 +1505,53 @@ export class AgentSession {
 	/**
 	 * Internal: Queue a steering message (already expanded, no extension command check).
 	 */
-	private async _queueSteer(text: string, images?: ImageContent[]): Promise<void> {
+	private async _queueSteer(text: string, images?: ImageContent[], source?: InputSource): Promise<void> {
 		this._steeringMessages.push(text);
 		this._emitQueueUpdate();
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
 		if (images) {
 			content.push(...images);
 		}
-		this.agent.steer({
+		const message: AgentMessage = {
 			role: "user",
 			content,
 			timestamp: Date.now(),
-		});
+		};
+		if (source) {
+			this._inputSources.set(message, source);
+		}
+		try {
+			this.agent.steer(message);
+		} catch (error) {
+			this._inputSources.delete(message);
+			throw error;
+		}
 	}
 
 	/**
 	 * Internal: Queue a follow-up message (already expanded, no extension command check).
 	 */
-	private async _queueFollowUp(text: string, images?: ImageContent[]): Promise<void> {
+	private async _queueFollowUp(text: string, images?: ImageContent[], source?: InputSource): Promise<void> {
 		this._followUpMessages.push(text);
 		this._emitQueueUpdate();
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
 		if (images) {
 			content.push(...images);
 		}
-		this.agent.followUp({
+		const message: AgentMessage = {
 			role: "user",
 			content,
 			timestamp: Date.now(),
-		});
+		};
+		if (source) {
+			this._inputSources.set(message, source);
+		}
+		try {
+			this.agent.followUp(message);
+		} catch (error) {
+			this._inputSources.delete(message);
+			throw error;
+		}
 	}
 
 	/**

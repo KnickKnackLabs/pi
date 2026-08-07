@@ -1667,6 +1667,25 @@ The hook is display-only. It does not modify persisted messages or model context
 
 See [built-in-message-renderer.ts](../examples/extensions/built-in-message-renderer.ts) for a complete wrapping example.
 
+### pi.registerTurnBoundaryRenderer(transform)
+
+Wrap the visual boundary Pi inserts before each user turn after the first. Without an override, the boundary is Pi's existing blank one-line spacer. The transform receives the current renderer and returns another synchronous renderer; multiple extensions compose in load order, with later transforms wrapping earlier ones.
+
+The renderer receives `{ message, source, isReplay }` and the current theme. `message` is an isolated snapshot. `source` is `"interactive"`, `"rpc"`, or `"extension"` for live prompts that enter through the corresponding input path. It is undefined for restored messages and direct `steer()` or `followUp()` calls whose origin is not known. `isReplay` is true while Pi reconstructs a saved transcript.
+
+Pi does not invoke the hook for the first rendered user message because there is no preceding turn to separate. Normal and skill-invocation user turns share the same outer boundary. If a transform throws or returns an invalid component, Pi falls back to the previous renderer layer.
+
+```typescript
+import { Text } from "@earendil-works/pi-tui";
+
+pi.registerTurnBoundaryRenderer((_current) => (context, theme) => {
+  const source = context.isReplay ? "replay" : (context.source ?? "unknown");
+  return new Text(theme.fg("dim", `── turn · ${source} ──`), 0, 0);
+});
+```
+
+See [turn-boundary-renderer.ts](../examples/extensions/turn-boundary-renderer.ts) for a complete example.
+
 ### pi.registerMarkdownTransformer(transformer)
 
 Register a transformer for the Markdown in normal user text, assistant text, and thinking blocks. Transformers run in extension load order, and each transformer receives the Markdown returned by the previous transformer. After the chain finishes, Pi renders the transformed content with its built-in renderer.
@@ -2937,6 +2956,8 @@ See [tui.md](tui.md) Pattern 7 for a complete example with mode indicator.
 
 Use `pi.registerBuiltInMessageRenderer()` to wrap the native user or assistant transcript component without changing the message stored in the session or sent to the model. The current renderer can be delegated to, padded differently, or placed inside a component-owned card. See [built-in-message-renderer.ts](../examples/extensions/built-in-message-renderer.ts).
 
+Use `pi.registerTurnBoundaryRenderer()` to replace or wrap the blank spacer before each user turn after the first. See [turn-boundary-renderer.ts](../examples/extensions/turn-boundary-renderer.ts).
+
 Register a custom renderer for messages with your `customType`. Use message renderers for content that should participate in LLM context:
 
 ```typescript
@@ -3073,6 +3094,7 @@ All examples in [examples/extensions/](../examples/extensions/).
 | `status-line.ts` | Footer status indicator | `setStatus`, session events |
 | `working-indicator.ts` | Customize the streaming working indicator | `setWorkingIndicator`, `registerCommand` |
 | `built-in-message-renderer.ts` | Wrap native user and assistant transcript cards | `registerBuiltInMessageRenderer` |
+| `turn-boundary-renderer.ts` | Replace the boundary before user turns | `registerTurnBoundaryRenderer` |
 | `github-issue-autocomplete.ts` | Add `#1234` issue completions on top of built-in autocomplete by preloading recent open issues from `gh issue list` | `addAutocompleteProvider`, `on("session_start")`, `exec` |
 | `custom-footer.ts` | Replace footer entirely | `registerCommand`, `setFooter` |
 | `custom-header.ts` | Replace startup header | `on("session_start")`, `setHeader` |
