@@ -32,7 +32,15 @@ export function composeTurnBoundaryRenderer(
 		try {
 			const transformed = transform(previous);
 			if (typeof transformed !== "function") continue;
-			renderer = (context, theme) => tryRender(transformed, context, theme) ?? previous(context, theme);
+			renderer = (context, theme) => {
+				let isolatedContext: TurnBoundaryContext;
+				try {
+					isolatedContext = structuredClone(context);
+				} catch {
+					return previous(context, theme);
+				}
+				return tryRender(transformed, isolatedContext, theme) ?? previous(context, theme);
+			};
 		} catch {
 			// Keep the previous renderer and continue with the next transform.
 		}
