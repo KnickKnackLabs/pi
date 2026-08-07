@@ -645,10 +645,7 @@ export class AgentSession {
 
 		let sessionEvent: AgentSessionEvent;
 		if (event.type === "message_start") {
-			const source = event.message.role === "user" ? this._inputSources.get(event.message) : undefined;
-			if (event.message.role === "user") {
-				this._inputSources.delete(event.message);
-			}
+			const source = this._consumeInputSource(event.message);
 			sessionEvent = { ...event, source };
 		} else if (event.type === "agent_end") {
 			sessionEvent = { ...event, willRetry: this._willRetryAfterAgentEnd(event) };
@@ -1097,7 +1094,12 @@ export class AgentSession {
 	// Prompting
 	// =========================================================================
 
-	private async _runAgentPrompt(messages: AgentMessage | AgentMessage[]): Promise<void> {
+	private async _runAgentPrompt(messages: AgentMessage | AgentMessage[], inputSource?: InputSource): Promise<void> {
+		const userMessage = (Array.isArray(messages) ? messages : [messages]).find((message) => message.role === "user");
+		if (userMessage && inputSource) {
+			this._inputSources.set(userMessage, inputSource);
+		}
+
 		this._isAgentRunActive = true;
 		try {
 			await this.agent.prompt(messages);
@@ -1111,10 +1113,22 @@ export class AgentSession {
 				await this.agent.continue();
 			}
 		} finally {
+			if (userMessage) {
+				this._inputSources.delete(userMessage);
+			}
 			this._systemPromptOverride = undefined;
 			this._flushPendingBashMessages();
 			await this._emitAgentSettled();
 		}
+	}
+
+	private _consumeInputSource(message: AgentMessage): InputSource | undefined {
+		if (message.role !== "user") {
+			return undefined;
+		}
+		const source = this._inputSources.get(message);
+		this._inputSources.delete(message);
+		return source;
 	}
 
 	private async _handlePostAgentRun(): Promise<boolean> {
@@ -1307,17 +1321,7 @@ export class AgentSession {
 		}
 
 		preflightResult?.(true);
-		const userMessage = messages.find((message) => message.role === "user");
-		if (userMessage) {
-			this._inputSources.set(userMessage, inputSource);
-		}
-		try {
-			await this._runAgentPrompt(messages);
-		} finally {
-			if (userMessage) {
-				this._inputSources.delete(userMessage);
-			}
-		}
+		await this._runAgentPrompt(messages, inputSource);
 	}
 
 	queueCommand(command: string, args = "", options?: QueueCommandOptions): void {
@@ -1506,34 +1510,26 @@ export class AgentSession {
 	 * Internal: Queue a steering message (already expanded, no extension command check).
 	 */
 	private async _queueSteer(text: string, images?: ImageContent[], source?: InputSource): Promise<void> {
-		this._steeringMessages.push(text);
-		this._emitQueueUpdate();
-		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
-		if (images) {
-			content.push(...images);
-		}
-		const message: AgentMessage = {
-			role: "user",
-			content,
-			timestamp: Date.now(),
-		};
-		if (source) {
-			this._inputSources.set(message, source);
-		}
-		try {
-			this.agent.steer(message);
-		} catch (error) {
-			this._inputSources.delete(message);
-			throw error;
-		}
+		this._queueUserMessage("steer", text, images, source);
 	}
 
 	/**
 	 * Internal: Queue a follow-up message (already expanded, no extension command check).
 	 */
 	private async _queueFollowUp(text: string, images?: ImageContent[], source?: InputSource): Promise<void> {
-		this._followUpMessages.push(text);
+		this._queueUserMessage("followUp", text, images, source);
+	}
+
+	private _queueUserMessage(
+		delivery: "steer" | "followUp",
+		text: string,
+		images?: ImageContent[],
+		source?: InputSource,
+	): void {
+		const queue = delivery === "steer" ? this._steeringMessages : this._followUpMessages;
+		queue.push(text);
 		this._emitQueueUpdate();
+
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
 		if (images) {
 			content.push(...images);
@@ -1547,7 +1543,11 @@ export class AgentSession {
 			this._inputSources.set(message, source);
 		}
 		try {
-			this.agent.followUp(message);
+			if (delivery === "steer") {
+				this.agent.steer(message);
+			} else {
+				this.agent.followUp(message);
+			}
 		} catch (error) {
 			this._inputSources.delete(message);
 			throw error;

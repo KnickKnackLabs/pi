@@ -5,6 +5,7 @@ import type { InputSource, TurnBoundaryContext } from "../src/core/extensions/ty
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 
+const createTurnBoundary = Reflect.get(InteractiveMode.prototype, "createTurnBoundary");
 const addMessageToChat = Reflect.get(InteractiveMode.prototype, "addMessageToChat") as (
 	this: ReturnType<typeof createFakeMode>,
 	message: AgentMessage,
@@ -26,6 +27,7 @@ function createFakeMode(contexts: TurnBoundaryContext[] = [], useBoundary = true
 		: [];
 	return {
 		chatContainer: new Container(),
+		createTurnBoundary,
 		getUserMessageText: (message: AgentMessage) =>
 			message.role === "user"
 				? typeof message.content === "string"

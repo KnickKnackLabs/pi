@@ -3279,6 +3279,24 @@ export class InteractiveMode {
 		this.chatContainer.addChild(component);
 	}
 
+	private createTurnBoundary(
+		message: Extract<AgentMessage, { role: "user" }>,
+		options?: { source?: InputSource; isReplay?: boolean },
+	): Component {
+		const renderBoundary = composeTurnBoundaryRenderer(
+			() => new Spacer(1),
+			this.session.extensionRunner.getTurnBoundaryRendererTransforms(),
+		);
+		return renderBoundary(
+			{
+				message,
+				source: options?.source,
+				isReplay: options?.isReplay ?? false,
+			},
+			theme,
+		);
+	}
+
 	private addMessageToChat(
 		message: AgentMessage,
 		options?: { populateHistory?: boolean; source?: InputSource; isReplay?: boolean },
@@ -3330,20 +3348,7 @@ export class InteractiveMode {
 				const textContent = this.getUserMessageText(message);
 				if (textContent) {
 					if (this.chatContainer.children.length > 0) {
-						const renderBoundary = composeTurnBoundaryRenderer(
-							() => new Spacer(1),
-							this.session.extensionRunner.getTurnBoundaryRendererTransforms(),
-						);
-						this.chatContainer.addChild(
-							renderBoundary(
-								{
-									message,
-									source: options?.source,
-									isReplay: options?.isReplay ?? false,
-								},
-								theme,
-							),
-						);
+						this.chatContainer.addChild(this.createTurnBoundary(message, options));
 					}
 					const skillBlock = parseSkillBlock(textContent);
 					if (skillBlock) {
