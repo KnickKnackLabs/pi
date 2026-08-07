@@ -672,12 +672,14 @@ describe("ExtensionRunner", () => {
 				`export default function(pi) {
 	pi.registerBuiltInMessageRenderer("user", (current) => current);
 	pi.registerBuiltInMessageRenderer("assistant", (current) => current);
+	pi.registerTurnBoundaryRenderer((current) => current);
 }`,
 			);
 			fs.writeFileSync(
 				path.join(extensionsDir, "renderer-b.ts"),
 				`export default function(pi) {
 	pi.registerBuiltInMessageRenderer("user", (current) => current);
+	pi.registerTurnBoundaryRenderer((current) => current);
 }`,
 			);
 
@@ -693,6 +695,10 @@ describe("ExtensionRunner", () => {
 			);
 			expect(userTransforms).toEqual([firstUserRegistration?.transform, secondUserRegistration?.transform]);
 			expect(runner.getBuiltInMessageRendererTransforms("assistant")).toHaveLength(1);
+			expect(runner.getTurnBoundaryRendererTransforms()).toEqual([
+				result.extensions[0].turnBoundaryRendererTransforms?.[0]?.transform,
+				result.extensions[1].turnBoundaryRendererTransforms?.[0]?.transform,
+			]);
 		});
 
 		it("gets entry renderer by type", async () => {

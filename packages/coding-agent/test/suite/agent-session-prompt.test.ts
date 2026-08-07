@@ -32,9 +32,14 @@ describe("AgentSession prompt characterization", () => {
 		harnesses.push(harness);
 
 		harness.setResponses([fauxAssistantMessage("hello")]);
+		let source: string | undefined;
+		harness.session.subscribe((event) => {
+			if (event.type === "message_start" && event.message.role === "user") source = event.source;
+		});
 
 		await harness.session.prompt("hi");
 
+		expect(source).toBe("interactive");
 		expect(harness.session.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
 		expect(getMessageText(harness.session.messages[0]!)).toBe("hi");
 		expect(harness.getPendingResponseCount()).toBe(0);
@@ -253,9 +258,14 @@ describe("AgentSession prompt characterization", () => {
 		harnesses.push(harness);
 
 		harness.setResponses([fauxAssistantMessage("response")]);
+		let source: string | undefined;
+		harness.session.subscribe((event) => {
+			if (event.type === "message_start" && event.message.role === "user") source = event.source;
+		});
 
 		await harness.session.sendUserMessage("from extension");
 
+		expect(source).toBe("extension");
 		expect(harness.session.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
 		expect(getMessageText(harness.session.messages[0]!)).toBe("from extension");
 	});
@@ -286,6 +296,7 @@ describe("AgentSession prompt characterization", () => {
 			releaseToolExecution = resolve;
 		});
 		const inputEvents: InputEvent[] = [];
+		const userMessageSources: Array<{ text: string; source: string | undefined }> = [];
 		const waitTool: AgentTool = {
 			name: "wait",
 			label: "Wait",
@@ -324,14 +335,24 @@ describe("AgentSession prompt characterization", () => {
 			});
 		});
 
+		harness.session.subscribe((event) => {
+			if (event.type === "message_start" && event.message.role === "user") {
+				userMessageSources.push({ text: getMessageText(event.message), source: event.source });
+			}
+		});
+
 		const promptPromise = harness.session.prompt("start");
 		await sawToolStart;
-		await harness.session.prompt("queued", { streamingBehavior: "followUp" });
+		await harness.session.prompt("queued", { streamingBehavior: "followUp", source: "rpc" });
 
 		expect(inputEvents.map((event) => event.streamingBehavior)).toEqual([undefined, "followUp"]);
 
 		releaseToolExecution?.();
 		await promptPromise;
+		expect(userMessageSources).toEqual([
+			{ text: "start", source: "interactive" },
+			{ text: "queued", source: "rpc" },
+		]);
 	});
 
 	it("throws when prompted during streaming without a streamingBehavior", async () => {

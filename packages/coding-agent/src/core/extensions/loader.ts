@@ -47,6 +47,7 @@ import type {
 	RegisteredCommand,
 	ToolDefinition,
 	ToolTransform,
+	TurnBoundaryRendererTransform,
 } from "./types.ts";
 
 /** Modules available to extensions via virtualModules (for compiled Bun binary) */
@@ -319,6 +320,12 @@ function createExtensionAPI(
 				role,
 				transform: transform as unknown as BuiltInMessageRendererTransform<BuiltInMessageRole>,
 			});
+		},
+
+		registerTurnBoundaryRenderer(transform: TurnBoundaryRendererTransform): void {
+			runtime.assertActive();
+			extension.turnBoundaryRendererTransforms ??= [];
+			extension.turnBoundaryRendererTransforms.push({ transform });
 		},
 
 		registerMarkdownTransformer(transformer: MarkdownTransformer): void {

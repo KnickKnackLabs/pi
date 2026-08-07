@@ -175,6 +175,9 @@ export type {
 	TreeNavigationOptions,
 	TreeNavigationSummary,
 	TreePreparation,
+	TurnBoundaryContext,
+	TurnBoundaryRenderer,
+	TurnBoundaryRendererTransform,
 	TurnEndEvent,
 	TurnStartEvent,
 	// Events - User Bash

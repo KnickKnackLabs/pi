@@ -66,6 +66,7 @@ import type {
 	ToolResultEvent,
 	ToolResultEventResult,
 	TreeNavigationOptions,
+	TurnBoundaryRendererTransform,
 	UserBashEvent,
 	UserBashEventResult,
 } from "./types.ts";
@@ -607,6 +608,12 @@ export class ExtensionRunner {
 			(extension.builtInMessageRendererTransforms ?? [])
 				.filter((registration) => registration.role === role)
 				.map((registration) => registration.transform as unknown as BuiltInMessageRendererTransform<Role>),
+		);
+	}
+
+	getTurnBoundaryRendererTransforms(): TurnBoundaryRendererTransform[] {
+		return this.extensions.flatMap((extension) =>
+			(extension.turnBoundaryRendererTransforms ?? []).map((registration) => registration.transform),
 		);
 	}
 
