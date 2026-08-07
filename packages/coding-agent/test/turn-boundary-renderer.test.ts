@@ -93,4 +93,17 @@ describe("composeTurnBoundaryRenderer", () => {
 		expect(trace).toEqual(["healthy:before", "healthy:after"]);
 		expect(result.render(40).map((line) => stripAnsi(line).trimEnd())).toEqual(["healthy", "fallback"]);
 	});
+
+	test("isolates a fallback layer from mutations made by a failed transform", () => {
+		initTheme("dark");
+		const mutateThenThrow: TurnBoundaryRendererTransform = () => (currentContext) => {
+			currentContext.source = "rpc";
+			throw new Error("render failed");
+		};
+		const fallback: TurnBoundaryRenderer = (currentContext) => new Text(currentContext.source ?? "unknown", 0, 0);
+
+		const result = composeTurnBoundaryRenderer(fallback, [mutateThenThrow])(context, theme);
+
+		expect(result.render(40).map((line) => stripAnsi(line).trimEnd())).toEqual(["interactive"]);
+	});
 });
