@@ -7,6 +7,7 @@ import { createHarness, getAssistantTexts, getUserTexts, type Harness } from "./
 
 vi.mock("../../src/core/output-guard.js", () => ({
 	flushRawStdout: vi.fn(async () => {}),
+	waitForRawStdoutBackpressure: vi.fn(async () => {}),
 	writeRawStdout: vi.fn(),
 }));
 
