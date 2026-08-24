@@ -61,7 +61,7 @@ describe("AssistantMessageComponent", () => {
 		expect(rendered.includes(OSC133_ZONE_FINAL)).toBe(false);
 	});
 
-	test("renders length stops as visible errors", () => {
+	test("renders length stops with neutral truncation wording", () => {
 		initTheme("dark");
 
 		const component = new AssistantMessageComponent(
@@ -71,8 +71,7 @@ describe("AssistantMessageComponent", () => {
 		const rendered = component.render(80).join("\n");
 
 		expect(rendered).toContain("Thinking...");
-		expect(rendered).toContain("maximum output token limit");
-		expect(rendered).toContain("response may be incomplete");
+		expect(rendered).toContain("Response was truncated before completion.");
 	});
 
 	test("coalesces adjacent thinking blocks into one hidden thinking label", () => {

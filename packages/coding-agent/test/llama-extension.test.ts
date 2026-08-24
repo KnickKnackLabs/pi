@@ -1,7 +1,7 @@
 import { once } from "node:events";
 import { createServer, type RequestListener, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import type { AuthContext, AuthPrompt, ModelsStoreEntry } from "@earendil-works/pi-ai";
+import type { AuthContext, AuthPrompt, ModelsPublication, ModelsStoreEntry } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
 import { createEventBus } from "../src/core/event-bus.ts";
 import { createExtensionRuntime, loadExtensionFromFactory } from "../src/core/extensions/loader.ts";
@@ -59,7 +59,7 @@ describe("llama.cpp extension", () => {
 		expect(() => normalizeLlamaServerUrl("file:///tmp/llama")).toThrow("http or https");
 	});
 
-	it("exposes only loaded models with router metadata", () => {
+	it("exposes loaded and sleeping models with router metadata", () => {
 		const controller = createLlamaProvider();
 		controller.setCatalog(
 			[
@@ -69,6 +69,7 @@ describe("llama.cpp extension", () => {
 					architecture: { input_modalities: ["text", "image"] },
 					meta: { n_ctx: 65536, n_ctx_train: 131072 },
 				},
+				{ id: "sleeping", status: { value: "sleeping" } },
 				{ id: "unloaded", status: { value: "unloaded" } },
 				{ id: "loading", status: { value: "loading" } },
 			],
@@ -83,25 +84,21 @@ describe("llama.cpp extension", () => {
 				maxTokens: 65536,
 				input: ["text", "image"],
 			}),
+			expect.objectContaining({
+				id: "sleeping",
+				baseUrl: "http://localhost:8080/v1",
+			}),
 		]);
 	});
 
-	it("persists and restores loaded models for cache-only startup refreshes", async () => {
+	it("persists and restores selectable models for cache-only startup refreshes", async () => {
 		let cachedEntry: ModelsStoreEntry | undefined;
-		const store = {
-			read: async () => cachedEntry,
-			write: async (entry: ModelsStoreEntry) => {
-				cachedEntry = structuredClone(entry);
-			},
-			delete: async () => {
-				cachedEntry = undefined;
-			},
-		};
 		const { url } = await listen((request, response) => {
 			if (request.url === "/models") {
 				json(response, {
 					data: [
 						{ id: "loaded", status: { value: "loaded" }, meta: { n_ctx: 32768 } },
+						{ id: "sleeping", status: { value: "sleeping" }, meta: { n_ctx: 32768 } },
 						{ id: "unloaded", status: { value: "unloaded" } },
 					],
 				});
@@ -110,23 +107,34 @@ describe("llama.cpp extension", () => {
 			response.writeHead(404).end();
 		});
 
+		const publish = async (publication: ModelsPublication): Promise<boolean> => {
+			if (publication.persist === null) cachedEntry = undefined;
+			else if (publication.persist !== undefined) cachedEntry = structuredClone(publication.persist);
+			publication.update?.();
+			return true;
+		};
 		const first = createLlamaProvider();
 		await first.provider.refreshModels?.({
 			credential: { type: "api_key", key: "local", env: { LLAMA_BASE_URL: url } },
-			store,
+			stored: cachedEntry,
+			publish,
 			allowNetwork: true,
+			signal: new AbortController().signal,
 		});
-		expect(first.provider.getModels().map((model) => model.id)).toEqual(["loaded"]);
-		expect(cachedEntry?.models.map((model) => model.id)).toEqual(["loaded"]);
+		expect(first.provider.getModels().map((model) => model.id)).toEqual(["loaded", "sleeping"]);
+		expect(cachedEntry?.models.map((model) => model.id)).toEqual(["loaded", "sleeping"]);
 
 		const second = createLlamaProvider();
 		await second.provider.refreshModels?.({
 			credential: { type: "api_key", key: "local", env: { LLAMA_BASE_URL: url } },
-			store,
+			stored: cachedEntry,
+			publish,
 			allowNetwork: false,
+			signal: new AbortController().signal,
 		});
 		expect(second.provider.getModels()).toEqual([
 			expect.objectContaining({ id: "loaded", baseUrl: `${url}/v1`, contextWindow: 32768 }),
+			expect.objectContaining({ id: "sleeping", baseUrl: `${url}/v1`, contextWindow: 32768 }),
 		]);
 	});
 
@@ -137,8 +145,9 @@ describe("llama.cpp extension", () => {
 			env: async () => undefined,
 			fileExists: async () => false,
 		};
-		expect(await auth.check?.({ ctx: emptyContext })).toBeUndefined();
-		expect(await auth.resolve({ ctx: emptyContext })).toBeUndefined();
+		const signal = new AbortController().signal;
+		expect(await auth.check?.({ ctx: emptyContext, signal })).toBeUndefined();
+		expect(await auth.resolve({ ctx: emptyContext, signal })).toBeUndefined();
 
 		const { url } = await listen((request, response) => {
 			expect(request.headers.authorization).toBe("Bearer secret");
@@ -146,6 +155,7 @@ describe("llama.cpp extension", () => {
 		});
 		const answers = [url, "secret"];
 		const credential = await auth.login!({
+			signal,
 			prompt: async (_prompt: AuthPrompt) => answers.shift()!,
 			notify: () => {},
 		});
@@ -154,7 +164,7 @@ describe("llama.cpp extension", () => {
 			key: "secret",
 			env: { LLAMA_BASE_URL: url },
 		});
-		expect(await auth.resolve({ ctx: emptyContext, credential })).toEqual({
+		expect(await auth.resolve({ ctx: emptyContext, credential, signal })).toEqual({
 			auth: { apiKey: "secret", baseUrl: `${url}/v1` },
 			env: { LLAMA_BASE_URL: url },
 			source: "stored credential",

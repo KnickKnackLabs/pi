@@ -1,4 +1,5 @@
 import { clean, compare, prerelease, valid } from "semver";
+import { fetchWithRetry } from "./management-http.ts";
 import { getPiUserAgent } from "./pi-user-agent.ts";
 
 const UPSTREAM_LATEST_VERSION_URL = "https://pi.dev/api/latest-version";
@@ -21,6 +22,27 @@ export interface LatestPiRelease {
 interface VersionCheckOptions {
 	timeoutMs?: number;
 	channel?: PiReleaseChannel;
+	retry?: boolean;
+}
+
+/** Include useful errno details hidden behind Node's generic "fetch failed" error. */
+export function formatVersionCheckError(error: unknown): string {
+	const rootMessage = error instanceof Error && error.message ? error.message : String(error);
+	const cause = error instanceof Error ? error.cause : undefined;
+	const causes = cause instanceof AggregateError ? cause.errors : cause === undefined ? [] : [cause];
+	const codes = causes
+		.map((value) =>
+			typeof value === "object" && value !== null && "code" in value && typeof value.code === "string"
+				? value.code
+				: undefined,
+		)
+		.filter((code): code is string => code !== undefined);
+
+	if (codes.length > 0) return `${rootMessage} (${[...new Set(codes)].join(", ")})`;
+	const causeMessage = causes.find(
+		(value): value is Error => value instanceof Error && Boolean(value.message),
+	)?.message;
+	return causeMessage ? `${rootMessage} (cause: ${causeMessage})` : rootMessage;
 }
 
 export function comparePackageVersions(leftVersion: string, rightVersion: string): number | undefined {
@@ -52,14 +74,18 @@ function resolveReleaseChannel(currentVersion: string, channel: PiReleaseChannel
 async function getLatestUpstreamRelease(
 	currentVersion: string,
 	timeoutMs: number,
+	retry: boolean,
 ): Promise<LatestPiRelease | undefined> {
-	const response = await fetch(UPSTREAM_LATEST_VERSION_URL, {
-		headers: {
-			"User-Agent": getPiUserAgent(currentVersion),
-			accept: "application/json",
+	const response = await fetchWithRetry(
+		UPSTREAM_LATEST_VERSION_URL,
+		{
+			headers: {
+				"User-Agent": getPiUserAgent(currentVersion),
+				accept: "application/json",
+			},
 		},
-		signal: AbortSignal.timeout(timeoutMs),
-	});
+		{ maxRetries: retry ? 2 : 0, timeoutMs },
+	);
 	if (!response.ok) return undefined;
 
 	const data = (await response.json()) as {
@@ -81,15 +107,22 @@ async function getLatestUpstreamRelease(
 	};
 }
 
-async function getLatestKklRelease(currentVersion: string, timeoutMs: number): Promise<LatestPiRelease | undefined> {
-	const response = await fetch(KKL_LATEST_RELEASE_URL, {
-		headers: {
-			"User-Agent": getPiUserAgent(currentVersion),
-			accept: "application/vnd.github+json",
-			"X-GitHub-Api-Version": "2022-11-28",
+async function getLatestKklRelease(
+	currentVersion: string,
+	timeoutMs: number,
+	retry: boolean,
+): Promise<LatestPiRelease | undefined> {
+	const response = await fetchWithRetry(
+		KKL_LATEST_RELEASE_URL,
+		{
+			headers: {
+				"User-Agent": getPiUserAgent(currentVersion),
+				accept: "application/vnd.github+json",
+				"X-GitHub-Api-Version": "2022-11-28",
+			},
 		},
-		signal: AbortSignal.timeout(timeoutMs),
-	});
+		{ maxRetries: retry ? 2 : 0, timeoutMs },
+	);
 	if (!response.ok) return undefined;
 
 	const data = (await response.json()) as { html_url?: unknown; tag_name?: unknown };
@@ -112,9 +145,10 @@ export async function getLatestPiRelease(
 	if (process.env.PI_OFFLINE) return undefined;
 
 	const timeoutMs = options.timeoutMs ?? DEFAULT_VERSION_CHECK_TIMEOUT_MS;
+	const retry = options.retry ?? false;
 	return resolveReleaseChannel(currentVersion, options.channel ?? "auto") === "kkl"
-		? getLatestKklRelease(currentVersion, timeoutMs)
-		: getLatestUpstreamRelease(currentVersion, timeoutMs);
+		? getLatestKklRelease(currentVersion, timeoutMs, retry)
+		: getLatestUpstreamRelease(currentVersion, timeoutMs, retry);
 }
 
 export async function getLatestPiVersion(
