@@ -214,14 +214,7 @@ export class AssistantMessageComponent extends Container {
 		if (message.stopReason === "length") {
 			contentContainer.addChild(new Spacer(1));
 			contentContainer.addChild(
-				new Text(
-					theme.fg(
-						"error",
-						"Error: Model stopped because it reached the maximum output token limit. The response may be incomplete.",
-					),
-					outputPad,
-					0,
-				),
+				new Text(theme.fg("error", "Response was truncated before completion."), outputPad, 0),
 			);
 		} else if (!this.hasToolCalls) {
 			if (message.stopReason === "aborted") {

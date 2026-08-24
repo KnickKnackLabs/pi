@@ -1,6 +1,6 @@
 import Type, { type Static } from "typebox";
 
-export const PROTOCOL_VERSION = 2 as const;
+export const PROTOCOL_VERSION = 1 as const;
 
 const IdSchema = Type.String({ minLength: 1 });
 const TimestampSchema = Type.Integer({ minimum: 0 });
@@ -87,7 +87,7 @@ export const ImageContentSchema = StrictObject({
 	mimeType: Type.String({ minLength: 1 }),
 });
 export const ToolCallContentSchema = StrictObject({
-	type: Type.Literal("tool_call"),
+	type: Type.Literal("toolCall"),
 	toolCallId: IdSchema,
 	toolName: IdSchema,
 	input: JsonValueSchema,
@@ -123,32 +123,43 @@ export const UserTranscriptItemSchema = StrictObject({
 	content: Type.Array(UserContentSchema),
 	timestamp: TimestampSchema,
 });
-export const AssistantTranscriptItemSchema = StrictObject({
+const AssistantTranscriptItemProperties = {
 	id: IdSchema,
 	role: Type.Literal("assistant"),
 	content: Type.Array(AssistantContentSchema),
-	status: Type.Union([
-		Type.Literal("streaming"),
-		Type.Literal("complete"),
-		Type.Literal("error"),
-		Type.Literal("aborted"),
-	]),
 	model: ModelRefSchema,
 	responseModel: Type.Optional(Type.String({ minLength: 1 })),
 	usage: Type.Optional(UsageSchema),
-	stopReason: Type.Optional(
-		Type.Union([
-			Type.Literal("stop"),
-			Type.Literal("length"),
-			Type.Literal("tool_use"),
-			Type.Literal("error"),
-			Type.Literal("aborted"),
-		]),
-	),
-	errorMessage: Type.Optional(Type.String()),
 	timestamp: TimestampSchema,
+} as const;
+const StreamingAssistantTranscriptItemSchema = StrictObject({
+	...AssistantTranscriptItemProperties,
+	status: Type.Literal("streaming"),
 });
-export const ToolTranscriptItemSchema = StrictObject({
+const CompleteAssistantTranscriptItemSchema = StrictObject({
+	...AssistantTranscriptItemProperties,
+	status: Type.Literal("complete"),
+	stopReason: Type.Union([Type.Literal("stop"), Type.Literal("length"), Type.Literal("toolUse")]),
+});
+const ErrorAssistantTranscriptItemSchema = StrictObject({
+	...AssistantTranscriptItemProperties,
+	status: Type.Literal("error"),
+	stopReason: Type.Literal("error"),
+	errorMessage: Type.Optional(Type.String({ minLength: 1 })),
+});
+const AbortedAssistantTranscriptItemSchema = StrictObject({
+	...AssistantTranscriptItemProperties,
+	status: Type.Literal("aborted"),
+	stopReason: Type.Literal("aborted"),
+	errorMessage: Type.Optional(Type.String()),
+});
+export const AssistantTranscriptItemSchema = Type.Union([
+	StreamingAssistantTranscriptItemSchema,
+	CompleteAssistantTranscriptItemSchema,
+	ErrorAssistantTranscriptItemSchema,
+	AbortedAssistantTranscriptItemSchema,
+]);
+const ToolTranscriptItemProperties = {
 	id: IdSchema,
 	role: Type.Literal("tool"),
 	toolCallId: IdSchema,
@@ -156,11 +167,29 @@ export const ToolTranscriptItemSchema = StrictObject({
 	input: JsonValueSchema,
 	content: Type.Array(ToolContentSchema),
 	details: Type.Optional(JsonValueSchema),
-	status: Type.Union([Type.Literal("running"), Type.Literal("complete"), Type.Literal("error")]),
-	isError: Type.Boolean(),
 	usage: Type.Optional(UsageSchema),
 	timestamp: TimestampSchema,
+} as const;
+const RunningToolTranscriptItemSchema = StrictObject({
+	...ToolTranscriptItemProperties,
+	status: Type.Literal("running"),
+	isError: Type.Literal(false),
 });
+const CompleteToolTranscriptItemSchema = StrictObject({
+	...ToolTranscriptItemProperties,
+	status: Type.Literal("complete"),
+	isError: Type.Literal(false),
+});
+const ErrorToolTranscriptItemSchema = StrictObject({
+	...ToolTranscriptItemProperties,
+	status: Type.Literal("error"),
+	isError: Type.Literal(true),
+});
+export const ToolTranscriptItemSchema = Type.Union([
+	RunningToolTranscriptItemSchema,
+	CompleteToolTranscriptItemSchema,
+	ErrorToolTranscriptItemSchema,
+]);
 export const TranscriptItemSchema = Type.Union([
 	UserTranscriptItemSchema,
 	AssistantTranscriptItemSchema,
@@ -181,7 +210,7 @@ export const TranscriptProgressSchema = Type.Union([
 		type: Type.Literal("assistant_delta"),
 		messageId: IdSchema,
 		contentIndex: Type.Integer({ minimum: 0 }),
-		kind: Type.Union([Type.Literal("text"), Type.Literal("thinking"), Type.Literal("tool_call")]),
+		kind: Type.Union([Type.Literal("text"), Type.Literal("thinking"), Type.Literal("toolCall")]),
 		delta: Type.String(),
 	}),
 	StrictObject({
@@ -190,12 +219,26 @@ export const TranscriptProgressSchema = Type.Union([
 	}),
 	StrictObject({
 		type: Type.Literal("item_finished"),
-		item: Type.Union([AssistantTranscriptItemSchema, ToolTranscriptItemSchema]),
+		item: Type.Union([
+			CompleteAssistantTranscriptItemSchema,
+			ErrorAssistantTranscriptItemSchema,
+			AbortedAssistantTranscriptItemSchema,
+			CompleteToolTranscriptItemSchema,
+			ErrorToolTranscriptItemSchema,
+		]),
 	}),
 ]);
 export type TranscriptProgress = Static<typeof TranscriptProgressSchema>;
 
-const SessionSummaryProperties = {
+export const SessionMetadataSchema = StrictObject({
+	id: IdSchema,
+	createdAt: TimestampSchema,
+	updatedAt: Type.Optional(TimestampSchema),
+	parentSessionId: Type.Optional(IdSchema),
+	sessionName: Type.Optional(Type.String()),
+	cwd: Type.Optional(Type.String({ minLength: 1 })),
+});
+export const SessionSnapshotSchema = StrictObject({
 	id: IdSchema,
 	name: Type.Optional(Type.String()),
 	cwd: Type.String({ minLength: 1 }),
@@ -206,35 +249,31 @@ const SessionSummaryProperties = {
 	thinkingLevel: ThinkingLevelSchema,
 	attached: Type.Boolean(),
 	locked: Type.Boolean(),
-} as const;
-
-export const SessionSummarySchema = StrictObject(SessionSummaryProperties);
-export const SessionSnapshotSchema = StrictObject({
-	...SessionSummaryProperties,
 	revision: Type.Integer({ minimum: 0 }),
 	transcript: Type.Array(TranscriptItemSchema),
 	queuedSteer: Type.Array(UserTranscriptItemSchema),
 	queuedSteerCount: Type.Integer({ minimum: 0 }),
 });
-export type SessionSummary = Static<typeof SessionSummarySchema>;
+export type SessionMetadata = Static<typeof SessionMetadataSchema>;
 export type SessionSnapshot = Static<typeof SessionSnapshotSchema>;
 
 export const ServerSnapshotSchema = StrictObject({
 	serverId: IdSchema,
 	protocolVersion: Type.Literal(PROTOCOL_VERSION),
 	revision: Type.Integer({ minimum: 0 }),
-	sessions: Type.Array(SessionSummarySchema),
+	sessions: Type.Array(SessionMetadataSchema),
 	models: Type.Array(ModelMetadataSchema),
 });
 export type ServerSnapshot = Static<typeof ServerSnapshotSchema>;
 
 export const ProtocolErrorCodeSchema = Type.Union([
-	Type.Literal("auth"),
 	Type.Literal("version"),
 	Type.Literal("busy"),
 	Type.Literal("session_locked"),
 	Type.Literal("not_found"),
 	Type.Literal("invalid_request"),
+	Type.Literal("not_implemented"),
+	Type.Literal("internal_error"),
 ]);
 export const ProtocolErrorSchema = StrictObject({
 	code: ProtocolErrorCodeSchema,
@@ -317,7 +356,7 @@ export const SetThinkingResultSchema = StrictObject({
 
 export const ListResultSchema = StrictObject({
 	command: Type.Literal("list"),
-	sessions: Type.Array(SessionSummarySchema),
+	sessions: Type.Array(SessionMetadataSchema),
 });
 export const DetachResultSchema = StrictObject({
 	command: Type.Literal("detach"),
@@ -346,7 +385,6 @@ export type ResultForCommand<TCommand extends Command> = TCommand["command"] ext
 export const ClientHelloSchema = StrictObject({
 	type: Type.Literal("hello"),
 	version: Type.Integer({ minimum: 0 }),
-	token: Type.String({ minLength: 1 }),
 });
 export type ClientHello = Static<typeof ClientHelloSchema>;
 

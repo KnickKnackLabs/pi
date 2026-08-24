@@ -1,3 +1,4 @@
+import { PiClient } from "@earendil-works/pi-client";
 import { createAssistantMessageEventStream, Type } from "@earendil-works/pi-ai";
 import { complete, getModel, getProviders, streamSimple } from "@earendil-works/pi-ai/compat";
 import {
@@ -5,12 +6,12 @@ import {
 	bashExecutionToText,
 	convertToLlm,
 	createCustomMessage,
+	InMemorySessionRepo,
 	FileError,
 	formatPromptTemplateInvocation,
 	formatSkillInvocation,
 	formatSkillsForSystemPrompt,
 	getOrThrow,
-	InMemorySessionRepo,
 	ok,
 	parseCommandArgs,
 	streamProxy,
@@ -59,6 +60,7 @@ console.log(
 	new FileError("not_found", "missing").code,
 	toError("boom").message,
 	typeof streamProxy,
+	typeof PiClient,
 	PROTOCOL_VERSION,
 	decodeCbor(encodeCbor({ browser: true })),
 );
