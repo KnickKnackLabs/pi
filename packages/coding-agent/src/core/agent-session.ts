@@ -105,12 +105,14 @@ import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
 import { exportSessionToJsonl } from "./session-export.ts";
 import type {
+	AgentSegmentMetadata,
+	AppendMessageOptions,
 	BranchSummaryEntry,
 	CompactionEntry,
 	InputKind,
+	SegmentMetadata,
 	SessionEntry,
 	SessionManager,
-	TurnMetadata,
 } from "./session-manager.ts";
 import { getLatestCompactionEntry } from "./session-manager.ts";
 import type { SettingsManager } from "./settings-manager.ts";
@@ -345,9 +347,9 @@ export class AgentSession {
 	private _eventListeners: AgentSessionEventListener[] = [];
 	private _inputSources = new WeakMap<AgentMessage, InputSource>();
 	private _inputKinds = new WeakMap<AgentMessage, InputKind>();
-	private _userTurns = new WeakMap<AgentMessage, TurnMetadata>();
-	private _activeAgentTurn: TurnMetadata | undefined;
-	private _agentTurnPending = false;
+	private _userSegments = new WeakMap<AgentMessage, SegmentMetadata>();
+	private _activeAgentSegment: AgentSegmentMetadata | undefined;
+	private _agentSegmentPending = false;
 	private _isAgentRunActive = false;
 	private _pendingExtensionMessageActions = 0;
 	private _idleWaitPromise: Promise<void> | undefined;
@@ -653,23 +655,44 @@ export class AgentSession {
 	// Track last assistant message for auto-compaction check
 	private _lastAssistantMessage: AssistantMessage | undefined = undefined;
 
-	private _ensureActiveAgentTurn(): TurnMetadata | undefined {
-		if (this._activeAgentTurn) {
-			return this._activeAgentTurn;
+	private _ensureActiveAgentSegment(): AgentSegmentMetadata | undefined {
+		if (this._activeAgentSegment) {
+			return this._activeAgentSegment;
 		}
-		if (!this._agentTurnPending) {
+		if (!this._agentSegmentPending) {
 			return undefined;
 		}
-		this._activeAgentTurn = this.sessionManager.allocateTurn("agent");
-		this._agentTurnPending = false;
-		return this._activeAgentTurn;
+		this._activeAgentSegment = this.sessionManager.allocateSegment("agent");
+		this._agentSegmentPending = false;
+		return this._activeAgentSegment;
+	}
+
+	private _segmentOptionsForMessage(
+		message: Extract<AgentMessage, { role: "user" | "assistant" | "toolResult" }>,
+		segment: SegmentMetadata | undefined,
+		inputKind: InputKind | undefined,
+	): AppendMessageOptions | undefined {
+		if (!segment) return undefined;
+		if (message.role === "user") {
+			if (segment.segmentKind === "user" && (inputKind === "normal" || inputKind === "follow-up")) {
+				return { segment, inputKind };
+			}
+			if (segment.segmentKind === "agent" && inputKind === "steer") {
+				return { segment, inputKind };
+			}
+			throw new Error("Invalid internal user conversation segment metadata");
+		}
+		if (segment.segmentKind !== "agent" || inputKind !== undefined) {
+			throw new Error("Invalid internal agent conversation segment metadata");
+		}
+		return { segment };
 	}
 
 	/** Internal handler for agent events - shared by subscribe and reconnect */
 	private _handleAgentEvent = async (event: AgentEvent): Promise<void> => {
 		if (event.type === "agent_start") {
-			this._activeAgentTurn = undefined;
-			this._agentTurnPending = true;
+			this._activeAgentSegment = undefined;
+			this._agentSegmentPending = true;
 		}
 
 		// When a user message starts, check if it's from either queue and remove it BEFORE emitting
@@ -678,17 +701,17 @@ export class AgentSession {
 			this._overflowRecoveryAttempted = false;
 			const inputKind = this._inputKinds.get(event.message);
 			if (inputKind === "steer") {
-				const turn = this._ensureActiveAgentTurn();
-				if (turn) {
-					this._userTurns.set(event.message, turn);
+				const segment = this._ensureActiveAgentSegment();
+				if (segment) {
+					this._userSegments.set(event.message, segment);
 				}
 			} else if (inputKind === "follow-up") {
-				this._activeAgentTurn = undefined;
-				const turn = this.sessionManager.allocateTurn("user");
-				if (turn) {
-					this._userTurns.set(event.message, turn);
+				this._activeAgentSegment = undefined;
+				const segment = this.sessionManager.allocateSegment("user");
+				if (segment) {
+					this._userSegments.set(event.message, segment);
 				}
-				this._agentTurnPending = true;
+				this._agentSegmentPending = true;
 			}
 
 			const messageText = contentText(event.message.content, "");
@@ -742,12 +765,15 @@ export class AgentSession {
 				event.message.role === "toolResult"
 			) {
 				// Regular LLM message - persist as SessionMessageEntry
-				const turn =
-					event.message.role === "user" ? this._userTurns.get(event.message) : this._ensureActiveAgentTurn();
+				const segment =
+					event.message.role === "user" ? this._userSegments.get(event.message) : this._ensureActiveAgentSegment();
 				const inputKind = event.message.role === "user" ? this._inputKinds.get(event.message) : undefined;
-				this.sessionManager.appendMessage(event.message, turn ? { turn, inputKind } : undefined);
+				this.sessionManager.appendMessage(
+					event.message,
+					this._segmentOptionsForMessage(event.message, segment, inputKind),
+				);
 				if (event.message.role === "user") {
-					this._userTurns.delete(event.message);
+					this._userSegments.delete(event.message);
 					this._inputKinds.delete(event.message);
 				}
 			}
@@ -776,8 +802,8 @@ export class AgentSession {
 		}
 
 		if (event.type === "agent_end") {
-			this._activeAgentTurn = undefined;
-			this._agentTurnPending = false;
+			this._activeAgentSegment = undefined;
+			this._agentSegmentPending = false;
 		}
 	};
 
@@ -1184,7 +1210,7 @@ export class AgentSession {
 			if (userMessage) {
 				this._inputSources.delete(userMessage);
 				this._inputKinds.delete(userMessage);
-				this._userTurns.delete(userMessage);
+				this._userSegments.delete(userMessage);
 			}
 			this._systemPromptOverride = undefined;
 			this._flushPendingBashMessages();
@@ -1399,9 +1425,9 @@ export class AgentSession {
 		const userMessage = messages.find((message) => message.role === "user");
 		if (userMessage) {
 			this._inputKinds.set(userMessage, "normal");
-			const turn = this.sessionManager.allocateTurn("user");
-			if (turn) {
-				this._userTurns.set(userMessage, turn);
+			const segment = this.sessionManager.allocateSegment("user");
+			if (segment) {
+				this._userSegments.set(userMessage, segment);
 			}
 		}
 		preflightResult?.(true);

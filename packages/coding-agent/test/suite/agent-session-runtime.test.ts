@@ -376,25 +376,25 @@ describe("AgentSessionRuntime characterization", () => {
 		expect(result).toEqual({ cancelled: false, selectedText: "legacy question" });
 		await runtime.session.bindExtensions({});
 
-		expect(runtime.session.sessionManager.getHeader()?.turnTrackingVersion).toBeUndefined();
-		expect(runtime.session.sessionManager.allocateTurn("user")).toBeUndefined();
+		expect(runtime.session.sessionManager.getHeader()?.segmentTrackingVersion).toBeUndefined();
+		expect(runtime.session.sessionManager.allocateSegment("user")).toBeUndefined();
 		await runtime.session.prompt("forked legacy prompt");
 
 		const forkedLines = readFileSync(runtime.session.sessionFile!, "utf8")
 			.trim()
 			.split("\n")
 			.map((line) => JSON.parse(line));
-		expect(forkedLines[0]).not.toHaveProperty("turnTrackingVersion");
+		expect(forkedLines[0]).not.toHaveProperty("segmentTrackingVersion");
 		for (const entry of forkedLines.filter((line) => line.type === "message")) {
-			expect(entry).not.toHaveProperty("turnNumber");
-			expect(entry).not.toHaveProperty("turnKind");
+			expect(entry).not.toHaveProperty("segmentNumber");
+			expect(entry).not.toHaveProperty("segmentKind");
 			expect(entry).not.toHaveProperty("inputKind");
 		}
 	});
 
 	it("keeps a legacy in-memory session untracked when forking before its first user entry", async () => {
 		const { runtime } = await createRuntimeForTest(() => {}, { inMemory: true });
-		runtime.session.sessionManager.newSession({ turnTrackingVersion: null });
+		runtime.session.sessionManager.newSession({ segmentTrackingVersion: null });
 		await runtime.session.prompt("legacy question");
 		const firstUser = runtime.session.getUserMessagesForForking()[0]!;
 
@@ -403,12 +403,12 @@ describe("AgentSessionRuntime characterization", () => {
 		await runtime.session.bindExtensions({});
 
 		expect(runtime.session.sessionFile).toBeUndefined();
-		expect(runtime.session.sessionManager.getHeader()?.turnTrackingVersion).toBeUndefined();
-		expect(runtime.session.sessionManager.allocateTurn("user")).toBeUndefined();
+		expect(runtime.session.sessionManager.getHeader()?.segmentTrackingVersion).toBeUndefined();
+		expect(runtime.session.sessionManager.allocateSegment("user")).toBeUndefined();
 		await runtime.session.prompt("forked legacy prompt");
 		for (const entry of runtime.session.sessionManager.getEntries().filter((entry) => entry.type === "message")) {
-			expect(entry).not.toHaveProperty("turnNumber");
-			expect(entry).not.toHaveProperty("turnKind");
+			expect(entry).not.toHaveProperty("segmentNumber");
+			expect(entry).not.toHaveProperty("segmentKind");
 			expect(entry).not.toHaveProperty("inputKind");
 		}
 	});

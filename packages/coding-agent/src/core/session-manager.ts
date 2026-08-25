@@ -28,15 +28,22 @@ import {
 } from "./messages.ts";
 
 export const CURRENT_SESSION_VERSION = 3;
-export const TURN_TRACKING_VERSION = 1;
+export const SEGMENT_TRACKING_VERSION = 1;
 
-export type TurnKind = "user" | "agent";
+export type SegmentKind = "user" | "agent";
 export type InputKind = "normal" | "steer" | "follow-up";
 
-export interface TurnMetadata {
-	turnNumber: number;
-	turnKind: TurnKind;
+export interface UserSegmentMetadata {
+	segmentNumber: number;
+	segmentKind: "user";
 }
+
+export interface AgentSegmentMetadata {
+	segmentNumber: number;
+	segmentKind: "agent";
+}
+
+export type SegmentMetadata = UserSegmentMetadata | AgentSegmentMetadata;
 
 export interface SessionHeader {
 	type: "session";
@@ -45,33 +52,31 @@ export interface SessionHeader {
 	timestamp: string;
 	cwd: string;
 	parentSession?: string;
-	/** Opts this session into persisted semantic turn metadata. */
-	turnTrackingVersion?: typeof TURN_TRACKING_VERSION;
+	/** Opts this session into persisted conversation-segment metadata. */
+	segmentTrackingVersion?: typeof SEGMENT_TRACKING_VERSION;
 }
 
 export interface NewSessionOptions {
 	id?: string;
 	parentSession?: string;
 	/** Omit for new tracked sessions; pass null only when deriving from a legacy session. */
-	turnTrackingVersion?: typeof TURN_TRACKING_VERSION | null;
+	segmentTrackingVersion?: typeof SEGMENT_TRACKING_VERSION | null;
 }
 
-export interface AppendMessageOptions {
-	turn?: TurnMetadata;
-	inputKind?: InputKind;
-}
+export type AppendMessageOptions =
+	| { segment?: undefined; inputKind?: undefined }
+	| { segment: UserSegmentMetadata; inputKind: "normal" | "follow-up" }
+	| { segment: AgentSegmentMetadata; inputKind?: "steer" };
 
-export interface AppendAtOptions extends AppendMessageOptions {
+export type AppendAtOptions = AppendMessageOptions & {
 	preserveLeaf?: boolean;
-}
+};
 
 export interface SessionEntryBase {
 	type: string;
 	id: string;
 	parentId: string | null;
 	timestamp: string;
-	turnNumber?: number;
-	turnKind?: TurnKind;
 	/** Overrides the active leaf after replaying this entry. */
 	leafIdAfter?: string | null;
 }
@@ -79,6 +84,8 @@ export interface SessionEntryBase {
 export interface SessionMessageEntry extends SessionEntryBase {
 	type: "message";
 	message: AgentMessage;
+	segmentNumber?: number;
+	segmentKind?: SegmentKind;
 	inputKind?: InputKind;
 }
 
@@ -891,7 +898,7 @@ export class SessionManager {
 	private labelsById: Map<string, string> = new Map();
 	private labelTimestampsById: Map<string, string> = new Map();
 	private leafId: string | null = null;
-	private nextTurnNumber = 1;
+	private nextSegmentNumber = 1;
 
 	private constructor(
 		cwd: string,
@@ -968,14 +975,14 @@ export class SessionManager {
 			timestamp,
 			cwd: this.cwd,
 			parentSession: options?.parentSession,
-			...(options?.turnTrackingVersion === null ? {} : { turnTrackingVersion: TURN_TRACKING_VERSION }),
+			...(options?.segmentTrackingVersion === null ? {} : { segmentTrackingVersion: SEGMENT_TRACKING_VERSION }),
 		};
 		this.fileEntries = [header];
 		this.byId.clear();
 		this.labelsById.clear();
 		this.labelTimestampsById.clear();
 		this.leafId = null;
-		this.nextTurnNumber = 1;
+		this.nextSegmentNumber = 1;
 		this.flushed = false;
 
 		if (this.persist) {
@@ -998,17 +1005,18 @@ export class SessionManager {
 		this.labelsById.clear();
 		this.labelTimestampsById.clear();
 		this.leafId = null;
-		let highestTurnNumber = 0;
+		let highestSegmentNumber = 0;
 		for (const entry of this.fileEntries) {
 			if (entry.type === "session") continue;
 			this.byId.set(entry.id, entry);
 			this.leafId = this._leafIdAfterReplay(entry);
 			if (
-				typeof entry.turnNumber === "number" &&
-				Number.isSafeInteger(entry.turnNumber) &&
-				entry.turnNumber > highestTurnNumber
+				entry.type === "message" &&
+				typeof entry.segmentNumber === "number" &&
+				Number.isSafeInteger(entry.segmentNumber) &&
+				entry.segmentNumber > highestSegmentNumber
 			) {
-				highestTurnNumber = entry.turnNumber;
+				highestSegmentNumber = entry.segmentNumber;
 			}
 			if (entry.type === "label") {
 				if (entry.label) {
@@ -1020,7 +1028,7 @@ export class SessionManager {
 				}
 			}
 		}
-		this.nextTurnNumber = highestTurnNumber + 1;
+		this.nextSegmentNumber = highestSegmentNumber + 1;
 	}
 
 	private _rewriteFile(): void {
@@ -1059,17 +1067,19 @@ export class SessionManager {
 		return this.sessionFile;
 	}
 
-	/** Allocate the next persisted semantic turn for tracked sessions. */
-	allocateTurn(turnKind: TurnKind): TurnMetadata | undefined {
-		if (this.getHeader()?.turnTrackingVersion !== TURN_TRACKING_VERSION) {
+	/** Allocate the next persisted conversation segment for tracked sessions. */
+	allocateSegment(segmentKind: "user"): UserSegmentMetadata | undefined;
+	allocateSegment(segmentKind: "agent"): AgentSegmentMetadata | undefined;
+	allocateSegment(segmentKind: SegmentKind): SegmentMetadata | undefined {
+		if (this.getHeader()?.segmentTrackingVersion !== SEGMENT_TRACKING_VERSION) {
 			return undefined;
 		}
-		if (!Number.isSafeInteger(this.nextTurnNumber) || this.nextTurnNumber < 1) {
-			throw new Error("Session turn number space exhausted");
+		if (!Number.isSafeInteger(this.nextSegmentNumber) || this.nextSegmentNumber < 1) {
+			throw new Error("Session segment number space exhausted");
 		}
-		const turn = { turnNumber: this.nextTurnNumber, turnKind };
-		this.nextTurnNumber += 1;
-		return turn;
+		const segment = { segmentNumber: this.nextSegmentNumber, segmentKind } as SegmentMetadata;
+		this.nextSegmentNumber += 1;
+		return segment;
 	}
 
 	_persist(entry: SessionEntry): void {
@@ -1124,19 +1134,66 @@ export class SessionManager {
 		return this.appendMessageAt(this.leafId, message, options);
 	}
 
+	private _validateMessageSegment(
+		message: Message | CustomMessage | BashExecutionMessage,
+		options: AppendMessageOptions,
+	): void {
+		const segment = options.segment;
+		const inputKind = options.inputKind;
+		if (segment === undefined && inputKind === undefined) return;
+		if (this.getHeader()?.segmentTrackingVersion !== SEGMENT_TRACKING_VERSION) {
+			throw new Error("Conversation segment metadata requires a tracked session");
+		}
+		if (segment === undefined || segment === null || typeof segment !== "object") {
+			throw new Error("inputKind requires conversation segment metadata");
+		}
+		if (!Number.isSafeInteger(segment.segmentNumber) || segment.segmentNumber < 1) {
+			throw new Error("segmentNumber must be a positive safe integer");
+		}
+		if (segment.segmentKind !== "user" && segment.segmentKind !== "agent") {
+			throw new Error("segmentKind must be user or agent");
+		}
+
+		if (message.role === "user") {
+			if (inputKind === "steer") {
+				if (segment.segmentKind !== "agent") {
+					throw new Error("Steering input requires an agent segment");
+				}
+				return;
+			}
+			if (inputKind === "normal" || inputKind === "follow-up") {
+				if (segment.segmentKind !== "user") {
+					throw new Error("Normal and follow-up input require a user segment");
+				}
+				return;
+			}
+			throw new Error("User segment metadata requires inputKind normal, follow-up, or steer");
+		}
+
+		if (message.role === "assistant" || message.role === "toolResult") {
+			if (segment.segmentKind !== "agent" || inputKind !== undefined) {
+				throw new Error("Assistant and tool-result messages require an agent segment without inputKind");
+			}
+			return;
+		}
+
+		throw new Error(`${message.role} messages cannot carry conversation segment metadata`);
+	}
+
 	appendMessageAt(
 		parentId: string | null,
 		message: Message | CustomMessage | BashExecutionMessage,
 		options: AppendAtOptions = {},
 	): string {
 		this._assertParentId(parentId);
+		this._validateMessageSegment(message, options);
 		const entry: SessionMessageEntry = {
 			type: "message",
 			id: generateId(this.byId),
 			parentId,
 			timestamp: new Date().toISOString(),
 			message,
-			...(options.turn ?? {}),
+			...(options.segment ?? {}),
 			...(options.inputKind ? { inputKind: options.inputKind } : {}),
 		};
 		if (options.preserveLeaf) {
@@ -1520,8 +1577,10 @@ export class SessionManager {
 			timestamp,
 			cwd: this.cwd,
 			parentSession: this.persist ? previousSessionFile : undefined,
-			turnTrackingVersion:
-				this.getHeader()?.turnTrackingVersion === TURN_TRACKING_VERSION ? TURN_TRACKING_VERSION : undefined,
+			segmentTrackingVersion:
+				this.getHeader()?.segmentTrackingVersion === SEGMENT_TRACKING_VERSION
+					? SEGMENT_TRACKING_VERSION
+					: undefined,
 		};
 
 		// Collect labels for entries in the path
@@ -1699,8 +1758,8 @@ export class SessionManager {
 			timestamp,
 			cwd: resolvedTargetCwd,
 			parentSession: resolvedSourcePath,
-			turnTrackingVersion:
-				sourceHeader.turnTrackingVersion === TURN_TRACKING_VERSION ? TURN_TRACKING_VERSION : undefined,
+			segmentTrackingVersion:
+				sourceHeader.segmentTrackingVersion === SEGMENT_TRACKING_VERSION ? SEGMENT_TRACKING_VERSION : undefined,
 		};
 		writeFileSync(newSessionFile, `${JSON.stringify(newHeader)}\n`, { flag: "wx" });
 

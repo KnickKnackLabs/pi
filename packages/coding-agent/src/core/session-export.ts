@@ -25,7 +25,7 @@ export function exportSessionToJsonl(
 		id: sessionManager.getSessionId(),
 		timestamp,
 		cwd: sessionManager.getCwd(),
-		turnTrackingVersion: sessionManager.getHeader()?.turnTrackingVersion,
+		segmentTrackingVersion: sessionManager.getHeader()?.segmentTrackingVersion,
 	};
 	const lines = [JSON.stringify(header)];
 

@@ -12,7 +12,7 @@ import type {
 import { emitSessionShutdownEvent } from "./extensions/runner.ts";
 import type { CreateAgentSessionResult } from "./sdk.ts";
 import { assertSessionCwdExists } from "./session-cwd.ts";
-import { SessionManager, TURN_TRACKING_VERSION } from "./session-manager.ts";
+import { SEGMENT_TRACKING_VERSION, SessionManager } from "./session-manager.ts";
 
 /**
  * Result returned by runtime creation.
@@ -294,10 +294,11 @@ export class AgentSessionRuntime {
 			}
 			const sessionDir = this.session.sessionManager.getSessionDir();
 			if (!targetLeafId) {
-				const sourceTurnTrackingVersion = this.session.sessionManager.getHeader()?.turnTrackingVersion;
+				const sourceSegmentTrackingVersion = this.session.sessionManager.getHeader()?.segmentTrackingVersion;
 				const sessionManager = SessionManager.create(this.cwd, sessionDir, {
 					parentSession: currentSessionFile,
-					turnTrackingVersion: sourceTurnTrackingVersion === TURN_TRACKING_VERSION ? TURN_TRACKING_VERSION : null,
+					segmentTrackingVersion:
+						sourceSegmentTrackingVersion === SEGMENT_TRACKING_VERSION ? SEGMENT_TRACKING_VERSION : null,
 				});
 				await this.teardownCurrent("fork", sessionManager.getSessionFile());
 				this.apply(
@@ -337,10 +338,11 @@ export class AgentSessionRuntime {
 
 		const sessionManager = this.session.sessionManager;
 		if (!targetLeafId) {
-			const sourceTurnTrackingVersion = sessionManager.getHeader()?.turnTrackingVersion;
+			const sourceSegmentTrackingVersion = sessionManager.getHeader()?.segmentTrackingVersion;
 			sessionManager.newSession({
 				parentSession: this.session.sessionFile,
-				turnTrackingVersion: sourceTurnTrackingVersion === TURN_TRACKING_VERSION ? TURN_TRACKING_VERSION : null,
+				segmentTrackingVersion:
+					sourceSegmentTrackingVersion === SEGMENT_TRACKING_VERSION ? SEGMENT_TRACKING_VERSION : null,
 			});
 		} else {
 			sessionManager.createBranchedSession(targetLeafId);

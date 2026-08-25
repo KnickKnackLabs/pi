@@ -189,25 +189,45 @@ interface SessionEntryBase {
 ### SessionHeader
 
 First line of the file. Metadata only, not part of the tree (no `id`/`parentId`).
+New sessions opt into conversation-segment metadata with `segmentTrackingVersion: 1`:
 
 ```json
-{"type":"session","version":3,"id":"uuid","timestamp":"2024-12-03T14:00:00.000Z","cwd":"/path/to/project"}
+{"type":"session","version":3,"id":"uuid","timestamp":"2024-12-03T14:00:00.000Z","cwd":"/path/to/project","segmentTrackingVersion":1}
 ```
 
+Sessions created before segment tracking have no marker and remain legacy sessions when resumed.
+Forks, branches, and JSONL exports preserve their source session's tracking mode; they do not upgrade legacy data.
 For sessions with a parent (created via `/fork`, `/clone`, or `newSession({ parentSession })`):
 
 ```json
-{"type":"session","version":3,"id":"uuid","timestamp":"2024-12-03T14:00:00.000Z","cwd":"/path/to/project","parentSession":"/path/to/original/session.jsonl"}
+{"type":"session","version":3,"id":"uuid","timestamp":"2024-12-03T14:00:00.000Z","cwd":"/path/to/project","parentSession":"/path/to/original/session.jsonl","segmentTrackingVersion":1}
 ```
 
 ### SessionMessageEntry
 
 A message in the conversation. The `message` field contains an `AgentMessage`.
+Tracked sessions may add `segmentNumber`, `segmentKind`, and, for user input, `inputKind` to message entries only.
+User and agent segments share one positive, monotonically increasing sequence within a session.
+The allocator restores the highest number from the entire JSONL file, so rewinding and branching in that file never reuse a persisted number.
+A fork copies existing numbers, then continues its own independent sequence.
+
+Writers accept these combinations:
+
+| Message role | `segmentKind` | `inputKind` |
+|--------------|---------------|-------------|
+| user | user | `normal` or `follow-up` |
+| user | agent | `steer` |
+| assistant or toolResult | agent | omitted |
+
+Custom, bash, and administrative entries carry no segment metadata.
+Tracked sessions may still contain message entries without metadata, and readers tolerate absent or unknown legacy data.
+Public append APIs reject invalid combinations and reject segment metadata in an untracked legacy session.
 
 ```json
-{"type":"message","id":"a1b2c3d4","parentId":"prev1234","timestamp":"2024-12-03T14:00:01.000Z","message":{"role":"user","content":"Hello"}}
-{"type":"message","id":"b2c3d4e5","parentId":"a1b2c3d4","timestamp":"2024-12-03T14:00:02.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Hi!"}],"provider":"anthropic","model":"claude-sonnet-4-5","usage":{...},"stopReason":"stop"}}
-{"type":"message","id":"c3d4e5f6","parentId":"b2c3d4e5","timestamp":"2024-12-03T14:00:03.000Z","message":{"role":"toolResult","toolCallId":"call_123","toolName":"bash","content":[{"type":"text","text":"output"}],"isError":false}}
+{"type":"message","id":"a1b2c3d4","parentId":"prev1234","timestamp":"2024-12-03T14:00:01.000Z","segmentNumber":1,"segmentKind":"user","inputKind":"normal","message":{"role":"user","content":"Hello"}}
+{"type":"message","id":"b2c3d4e5","parentId":"a1b2c3d4","timestamp":"2024-12-03T14:00:02.000Z","segmentNumber":2,"segmentKind":"agent","message":{"role":"assistant","content":[{"type":"text","text":"Hi!"}],"provider":"anthropic","model":"claude-sonnet-4-5","usage":{...},"stopReason":"stop"}}
+{"type":"message","id":"c3d4e5f6","parentId":"b2c3d4e5","timestamp":"2024-12-03T14:00:03.000Z","segmentNumber":2,"segmentKind":"agent","message":{"role":"toolResult","toolCallId":"call_123","toolName":"bash","content":[{"type":"text","text":"output"}],"isError":false}}
+{"type":"message","id":"d4e5f6g7","parentId":"c3d4e5f6","timestamp":"2024-12-03T14:00:04.000Z","segmentNumber":2,"segmentKind":"agent","inputKind":"steer","message":{"role":"user","content":"Change course"}}
 ```
 
 ### ModelChangeEntry
