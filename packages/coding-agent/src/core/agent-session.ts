@@ -104,7 +104,16 @@ import type { ModelRuntime } from "./model-runtime.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
 import { exportSessionToJsonl } from "./session-export.ts";
-import type { BranchSummaryEntry, CompactionEntry, SessionEntry, SessionManager } from "./session-manager.ts";
+import type {
+	AgentSegmentMetadata,
+	AppendMessageOptions,
+	BranchSummaryEntry,
+	CompactionEntry,
+	InputKind,
+	SegmentMetadata,
+	SessionEntry,
+	SessionManager,
+} from "./session-manager.ts";
 import { getLatestCompactionEntry } from "./session-manager.ts";
 import type { SettingsManager } from "./settings-manager.ts";
 import type { SlashCommandInfo } from "./slash-commands.ts";
@@ -337,6 +346,10 @@ export class AgentSession {
 	private _unsubscribeAgent?: () => void;
 	private _eventListeners: AgentSessionEventListener[] = [];
 	private _inputSources = new WeakMap<AgentMessage, InputSource>();
+	private _inputKinds = new WeakMap<AgentMessage, InputKind>();
+	private _userSegments = new WeakMap<AgentMessage, SegmentMetadata>();
+	private _activeAgentSegment: AgentSegmentMetadata | undefined;
+	private _agentSegmentPending = false;
 	private _isAgentRunActive = false;
 	private _pendingExtensionMessageActions = 0;
 	private _idleWaitPromise: Promise<void> | undefined;
@@ -642,12 +655,65 @@ export class AgentSession {
 	// Track last assistant message for auto-compaction check
 	private _lastAssistantMessage: AssistantMessage | undefined = undefined;
 
+	private _ensureActiveAgentSegment(): AgentSegmentMetadata | undefined {
+		if (this._activeAgentSegment) {
+			return this._activeAgentSegment;
+		}
+		if (!this._agentSegmentPending) {
+			return undefined;
+		}
+		this._activeAgentSegment = this.sessionManager.allocateSegment("agent");
+		this._agentSegmentPending = false;
+		return this._activeAgentSegment;
+	}
+
+	private _segmentOptionsForMessage(
+		message: Extract<AgentMessage, { role: "user" | "assistant" | "toolResult" }>,
+		segment: SegmentMetadata | undefined,
+		inputKind: InputKind | undefined,
+	): AppendMessageOptions | undefined {
+		if (!segment) return undefined;
+		if (message.role === "user") {
+			if (segment.segmentKind === "user" && (inputKind === "normal" || inputKind === "follow-up")) {
+				return { segment, inputKind };
+			}
+			if (segment.segmentKind === "agent" && inputKind === "steer") {
+				return { segment, inputKind };
+			}
+			throw new Error("Invalid internal user conversation segment metadata");
+		}
+		if (segment.segmentKind !== "agent" || inputKind !== undefined) {
+			throw new Error("Invalid internal agent conversation segment metadata");
+		}
+		return { segment };
+	}
+
 	/** Internal handler for agent events - shared by subscribe and reconnect */
 	private _handleAgentEvent = async (event: AgentEvent): Promise<void> => {
+		if (event.type === "agent_start") {
+			this._activeAgentSegment = undefined;
+			this._agentSegmentPending = true;
+		}
+
 		// When a user message starts, check if it's from either queue and remove it BEFORE emitting
 		// This ensures the UI sees the updated queue state
 		if (event.type === "message_start" && event.message.role === "user") {
 			this._overflowRecoveryAttempted = false;
+			const inputKind = this._inputKinds.get(event.message);
+			if (inputKind === "steer") {
+				const segment = this._ensureActiveAgentSegment();
+				if (segment) {
+					this._userSegments.set(event.message, segment);
+				}
+			} else if (inputKind === "follow-up") {
+				this._activeAgentSegment = undefined;
+				const segment = this.sessionManager.allocateSegment("user");
+				if (segment) {
+					this._userSegments.set(event.message, segment);
+				}
+				this._agentSegmentPending = true;
+			}
+
 			const messageText = contentText(event.message.content, "");
 			if (messageText) {
 				// Check steering queue first
@@ -699,7 +765,17 @@ export class AgentSession {
 				event.message.role === "toolResult"
 			) {
 				// Regular LLM message - persist as SessionMessageEntry
-				this.sessionManager.appendMessage(event.message);
+				const segment =
+					event.message.role === "user" ? this._userSegments.get(event.message) : this._ensureActiveAgentSegment();
+				const inputKind = event.message.role === "user" ? this._inputKinds.get(event.message) : undefined;
+				this.sessionManager.appendMessage(
+					event.message,
+					this._segmentOptionsForMessage(event.message, segment, inputKind),
+				);
+				if (event.message.role === "user") {
+					this._userSegments.delete(event.message);
+					this._inputKinds.delete(event.message);
+				}
 			}
 			// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
 
@@ -723,6 +799,11 @@ export class AgentSession {
 					this._retryAttempt = 0;
 				}
 			}
+		}
+
+		if (event.type === "agent_end") {
+			this._activeAgentSegment = undefined;
+			this._agentSegmentPending = false;
 		}
 	};
 
@@ -1128,6 +1209,8 @@ export class AgentSession {
 		} finally {
 			if (userMessage) {
 				this._inputSources.delete(userMessage);
+				this._inputKinds.delete(userMessage);
+				this._userSegments.delete(userMessage);
 			}
 			this._systemPromptOverride = undefined;
 			this._flushPendingBashMessages();
@@ -1339,6 +1422,14 @@ export class AgentSession {
 			return;
 		}
 
+		const userMessage = messages.find((message) => message.role === "user");
+		if (userMessage) {
+			this._inputKinds.set(userMessage, "normal");
+			const segment = this.sessionManager.allocateSegment("user");
+			if (segment) {
+				this._userSegments.set(userMessage, segment);
+			}
+		}
 		preflightResult?.(true);
 		await this._runAgentPrompt(messages, inputSource);
 	}
@@ -1558,6 +1649,7 @@ export class AgentSession {
 			content,
 			timestamp: Date.now(),
 		};
+		this._inputKinds.set(message, delivery === "steer" ? "steer" : "follow-up");
 		if (source) {
 			this._inputSources.set(message, source);
 		}
@@ -1569,6 +1661,7 @@ export class AgentSession {
 			}
 		} catch (error) {
 			this._inputSources.delete(message);
+			this._inputKinds.delete(message);
 			throw error;
 		}
 	}

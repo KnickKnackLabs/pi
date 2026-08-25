@@ -12,7 +12,7 @@ import type {
 import { emitSessionShutdownEvent } from "./extensions/runner.ts";
 import type { CreateAgentSessionResult } from "./sdk.ts";
 import { assertSessionCwdExists } from "./session-cwd.ts";
-import { SessionManager } from "./session-manager.ts";
+import { SEGMENT_TRACKING_VERSION, SessionManager } from "./session-manager.ts";
 
 /**
  * Result returned by runtime creation.
@@ -294,8 +294,12 @@ export class AgentSessionRuntime {
 			}
 			const sessionDir = this.session.sessionManager.getSessionDir();
 			if (!targetLeafId) {
-				const sessionManager = SessionManager.create(this.cwd, sessionDir);
-				sessionManager.newSession({ parentSession: currentSessionFile });
+				const sourceSegmentTrackingVersion = this.session.sessionManager.getHeader()?.segmentTrackingVersion;
+				const sessionManager = SessionManager.create(this.cwd, sessionDir, {
+					parentSession: currentSessionFile,
+					segmentTrackingVersion:
+						sourceSegmentTrackingVersion === SEGMENT_TRACKING_VERSION ? SEGMENT_TRACKING_VERSION : null,
+				});
 				await this.teardownCurrent("fork", sessionManager.getSessionFile());
 				this.apply(
 					await this.createRuntime({
@@ -334,7 +338,12 @@ export class AgentSessionRuntime {
 
 		const sessionManager = this.session.sessionManager;
 		if (!targetLeafId) {
-			sessionManager.newSession({ parentSession: this.session.sessionFile });
+			const sourceSegmentTrackingVersion = sessionManager.getHeader()?.segmentTrackingVersion;
+			sessionManager.newSession({
+				parentSession: this.session.sessionFile,
+				segmentTrackingVersion:
+					sourceSegmentTrackingVersion === SEGMENT_TRACKING_VERSION ? SEGMENT_TRACKING_VERSION : null,
+			});
 		} else {
 			sessionManager.createBranchedSession(targetLeafId);
 		}

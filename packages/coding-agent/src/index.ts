@@ -241,6 +241,9 @@ export {
 	type PromptTemplate,
 } from "./core/sdk.ts";
 export {
+	type AgentSegmentMetadata,
+	type AppendAtOptions,
+	type AppendMessageOptions,
 	type BranchSummaryEntry,
 	buildContextEntries,
 	buildSessionContext,
@@ -250,10 +253,14 @@ export {
 	type CustomMessageEntry,
 	type FileEntry,
 	getLatestCompactionEntry,
+	type InputKind,
 	type ModelChangeEntry,
 	migrateSessionEntries,
 	type NewSessionOptions,
 	parseSessionEntries,
+	SEGMENT_TRACKING_VERSION,
+	type SegmentKind,
+	type SegmentMetadata,
 	type SessionContext,
 	type SessionEntry,
 	type SessionEntryBase,
@@ -265,6 +272,7 @@ export {
 	type SessionTreeNode,
 	sessionEntryToContextMessages,
 	type ThinkingLevelChangeEntry,
+	type UserSegmentMetadata,
 } from "./core/session-manager.ts";
 export {
 	type CompactionSettings,

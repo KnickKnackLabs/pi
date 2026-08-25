@@ -189,25 +189,47 @@ interface SessionEntryBase {
 ### SessionHeader
 
 First line of the file. Metadata only, not part of the tree (no `id`/`parentId`).
+New sessions opt into conversation-segment metadata with `segmentTrackingVersion: 1`:
 
 ```json
-{"type":"session","version":3,"id":"uuid","timestamp":"2024-12-03T14:00:00.000Z","cwd":"/path/to/project"}
+{"type":"session","version":3,"id":"uuid","timestamp":"2024-12-03T14:00:00.000Z","cwd":"/path/to/project","segmentTrackingVersion":1}
 ```
 
+Sessions created before segment tracking have no marker and remain legacy sessions when resumed.
+Forks, branches, and JSONL exports preserve their source session's tracking mode; they do not upgrade legacy data.
 For sessions with a parent (created via `/fork`, `/clone`, or `newSession({ parentSession })`):
 
 ```json
-{"type":"session","version":3,"id":"uuid","timestamp":"2024-12-03T14:00:00.000Z","cwd":"/path/to/project","parentSession":"/path/to/original/session.jsonl"}
+{"type":"session","version":3,"id":"uuid","timestamp":"2024-12-03T14:00:00.000Z","cwd":"/path/to/project","parentSession":"/path/to/original/session.jsonl","segmentTrackingVersion":1}
 ```
 
 ### SessionMessageEntry
 
 A message in the conversation. The `message` field contains an `AgentMessage`.
+Tracked sessions may add `segmentNumber`, `segmentKind`, and, for user input, `inputKind` to message entries only.
+User and agent segments share one positive, monotonically increasing allocation sequence within a session.
+Writers call `allocateSegment()` once when a segment starts, then reuse the returned metadata for every message in that segment.
+The allocator restores the highest number from the entire JSONL file, so rewinding and branching in that file never reuse a persisted number.
+Appending a valid externally supplied higher number advances future allocations past it.
+A fork copies existing numbers, then continues its own independent sequence.
+
+Writers accept these combinations:
+
+| Message role | `segmentKind` | `inputKind` |
+|--------------|---------------|-------------|
+| user | user | `normal` or `follow-up` |
+| user | agent | `steer` |
+| assistant or toolResult | agent | omitted |
+
+Custom, bash, and administrative entries carry no segment metadata.
+Tracked sessions may still contain message entries without metadata, and readers tolerate absent or unknown legacy data.
+Public append APIs reject invalid combinations and reject segment metadata in an untracked legacy session.
 
 ```json
-{"type":"message","id":"a1b2c3d4","parentId":"prev1234","timestamp":"2024-12-03T14:00:01.000Z","message":{"role":"user","content":"Hello"}}
-{"type":"message","id":"b2c3d4e5","parentId":"a1b2c3d4","timestamp":"2024-12-03T14:00:02.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Hi!"}],"provider":"anthropic","model":"claude-sonnet-4-5","usage":{...},"stopReason":"stop"}}
-{"type":"message","id":"c3d4e5f6","parentId":"b2c3d4e5","timestamp":"2024-12-03T14:00:03.000Z","message":{"role":"toolResult","toolCallId":"call_123","toolName":"bash","content":[{"type":"text","text":"output"}],"isError":false}}
+{"type":"message","id":"a1b2c3d4","parentId":"prev1234","timestamp":"2024-12-03T14:00:01.000Z","segmentNumber":1,"segmentKind":"user","inputKind":"normal","message":{"role":"user","content":"Hello"}}
+{"type":"message","id":"b2c3d4e5","parentId":"a1b2c3d4","timestamp":"2024-12-03T14:00:02.000Z","segmentNumber":2,"segmentKind":"agent","message":{"role":"assistant","content":[{"type":"text","text":"Hi!"}],"provider":"anthropic","model":"claude-sonnet-4-5","usage":{...},"stopReason":"stop"}}
+{"type":"message","id":"c3d4e5f6","parentId":"b2c3d4e5","timestamp":"2024-12-03T14:00:03.000Z","segmentNumber":2,"segmentKind":"agent","message":{"role":"toolResult","toolCallId":"call_123","toolName":"bash","content":[{"type":"text","text":"output"}],"isError":false}}
+{"type":"message","id":"d4e5f6g7","parentId":"c3d4e5f6","timestamp":"2024-12-03T14:00:04.000Z","segmentNumber":2,"segmentKind":"agent","inputKind":"steer","message":{"role":"user","content":"Change course"}}
 ```
 
 ### ModelChangeEntry
@@ -386,25 +408,45 @@ for (const line of lines) {
 ## SessionManager API
 
 Key methods for working with sessions programmatically.
+The package root exports `SEGMENT_TRACKING_VERSION`, `SegmentKind`, `InputKind`, `SegmentMetadata`,
+`NewSessionOptions`, `AppendMessageOptions`, and `AppendAtOptions` with `SessionManager`.
+
+New sessions created by `create()`, `inMemory()`, or `newSession()` enable segment tracking by default.
+Opening or continuing a session preserves its header, while forks and branched sessions preserve the source tracking mode.
+`NewSessionOptions.segmentTrackingVersion: null` is reserved for deriving a new root from a known legacy session;
+ordinary new-session callers omit it.
+
+SDK writers allocate once when a conversation segment starts and reuse that metadata for every message in the segment.
+Legacy sessions return `undefined` from `allocateSegment()`, so callers that support both modes append without metadata in that case:
+
+```typescript
+const segment = session.allocateSegment("user");
+session.appendMessage(userMessage, segment ? { segment, inputKind: "normal" } : {});
+```
+
+Do not synthesize segment numbers for ordinary writes.
+If an importer supplies a valid higher number, `appendMessage()` reconciles the allocator so later allocations remain above every appended number.
 
 ### Static Creation Methods
-- `SessionManager.create(cwd, sessionDir?)` - New session
-- `SessionManager.open(path, sessionDir?)` - Open existing session file
-- `SessionManager.continueRecent(cwd, sessionDir?)` - Continue most recent or create new
-- `SessionManager.inMemory(cwd?)` - No file persistence
-- `SessionManager.forkFrom(sourcePath, targetCwd, sessionDir?)` - Fork session from another project
+- `SessionManager.create(cwd, sessionDir?, options?)` - Create a new tracked persisted session
+- `SessionManager.open(path, sessionDir?, cwdOverride?)` - Open a session without changing its tracking mode
+- `SessionManager.continueRecent(cwd, sessionDir?)` - Continue the most recent session, or create a new tracked session
+- `SessionManager.inMemory(cwd?, options?)` - Create a new tracked session without file persistence
+- `SessionManager.forkFrom(sourcePath, targetCwd, sessionDir?, options?)` - Fork a session and preserve its tracking mode
 
 ### Static Listing Methods
 - `SessionManager.list(cwd, sessionDir?, onProgress?)` - List sessions for a directory
 - `SessionManager.listAll(onProgress?)` - List all sessions across all projects
 
 ### Instance Methods - Session Management
-- `newSession(options?)` - Start a new session (options: `{ parentSession?: string }`)
-- `setSessionFile(path)` - Switch to a different session file
-- `createBranchedSession(leafId)` - Extract branch to new session file
+- `newSession(options?)` - Start a new tracked session, unless explicitly deriving from legacy mode
+- `setSessionFile(path)` - Switch to a different session file without changing its header
+- `createBranchedSession(leafId)` - Extract a branch and preserve the source tracking mode
 
-### Instance Methods - Appending (all return entry ID)
-- `appendMessage(message)` - Add message
+### Instance Methods - Appending (append methods return entry ID)
+- `allocateSegment(kind)` - Reserve the next user or agent segment; returns `undefined` for legacy sessions
+- `appendMessage(message, options?)` - Add a message with an optional allocated segment and valid `inputKind`
+- `appendMessageAt(parentId, message, options?)` - Add a message at a parent; also accepts `preserveLeaf`
 - `appendThinkingLevelChange(level)` - Record thinking change
 - `appendModelChange(provider, modelId)` - Record model change
 - `appendCompaction(summary, firstKeptEntryId, tokensBefore, details?, fromHook?)` - Add compaction
