@@ -371,15 +371,31 @@ describe("createProvider", () => {
 		const provider = createProvider({
 			id: "mixed",
 			auth: { apiKey: { name: "Test", resolve: async () => ({ auth: {} }) } },
-			models: [testModel("api-a", "model-a"), testModel("api-b", "model-b")],
+			models: [testModel("api-a", "model-a")],
 			api: { "api-a": recordingStreams("a", calls), "api-b": recordingStreams("b", calls) },
 		});
 		const models = createModels();
 		models.setProvider(provider);
 
+		expect(provider.supportsApi("api-a")).toBe(true);
+		expect(provider.supportsApi("api-b")).toBe(true);
+		expect(provider.supportsApi("api-ghost")).toBe(false);
+		expect(provider.supportsApi("toString")).toBe(false);
 		await models.completeSimple(testModel("api-a", "model-a"), context);
 		await models.completeSimple(testModel("api-b", "model-b"), context);
 		expect(calls).toEqual(["a:model-a", "b:model-b"]);
+	});
+
+	it("reports arbitrary APIs as supported for a single implementation", () => {
+		const provider = createProvider({
+			id: "single",
+			auth: { apiKey: { name: "Test", resolve: async () => ({ auth: {} }) } },
+			models: [],
+			api: recordingStreams("single", []),
+		});
+
+		expect(provider.supportsApi("api-a")).toBe(true);
+		expect(provider.supportsApi("api-ghost")).toBe(true);
 	});
 
 	it("merges provider-resolved env into stream options", async () => {

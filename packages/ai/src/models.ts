@@ -133,6 +133,9 @@ export interface Provider<TApi extends Api = Api> {
 	 */
 	filterModels?(models: readonly Model<TApi>[], credential: Credential | undefined): readonly Model<TApi>[];
 
+	/** Whether the provider has a runtime implementation for an API, independent of current catalog contents. */
+	supportsApi?(api: Api): boolean;
+
 	stream<T extends TApi>(
 		model: Model<T>,
 		context: Context,
@@ -736,6 +739,10 @@ export function createModels(options?: CreateModelsOptions): MutableModels {
 	return new ModelsImpl(options);
 }
 
+export type CreatedProvider<TApi extends Api = Api> = Provider<TApi> & {
+	supportsApi(api: Api): boolean;
+};
+
 export interface CreateProviderOptions<TApi extends Api = Api> {
 	id: string;
 	/** Display name. Default: `id`. */
@@ -759,7 +766,7 @@ export interface CreateProviderOptions<TApi extends Api = Api> {
  * an `api` map dispatches on `model.api`, and a model whose api has no entry
  * produces a stream error.
  */
-export function createProvider<TApi extends Api = Api>(input: CreateProviderOptions<TApi>): Provider<TApi> {
+export function createProvider<TApi extends Api = Api>(input: CreateProviderOptions<TApi>): CreatedProvider<TApi> {
 	const baselineModels = input.models;
 	let dynamicModels: readonly Model<TApi>[] = [];
 	const fetchModels = input.fetchModels;
@@ -791,7 +798,7 @@ export function createProvider<TApi extends Api = Api>(input: CreateProviderOpti
 		return run(streams);
 	};
 
-	const provider: Provider<TApi> = {
+	const provider: CreatedProvider<TApi> = {
 		id: input.id,
 		name: input.name ?? input.id,
 		baseUrl: input.baseUrl,
@@ -826,6 +833,7 @@ export function createProvider<TApi extends Api = Api>(input: CreateProviderOpti
 				}
 			: undefined,
 		filterModels: input.filterModels,
+		supportsApi: (api) => single !== undefined || (byApi !== undefined && Object.hasOwn(byApi, api)),
 		stream: (model, context, options) => dispatch(model, (streams) => streams.stream(model, context, options)),
 		streamSimple: (model, context, options) =>
 			dispatch(model, (streams) => streams.streamSimple(model, context, options)),

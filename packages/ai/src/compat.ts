@@ -41,7 +41,6 @@ import { piMessagesApi } from "./api/pi-messages.lazy.ts";
 import { getEnvApiKey } from "./env-api-keys.ts";
 import type { ModelsApiStreamOptions } from "./models.ts";
 import { builtinModels, getBuiltinModel, getBuiltinModels, getBuiltinProviders } from "./providers/all.ts";
-import { isCloudflareAIGatewayApi } from "./providers/cloudflare-ai-gateway.ts";
 
 export type { BuiltinProvider } from "./providers/all.ts";
 
@@ -238,10 +237,9 @@ function getBuiltinProviderForModel(model: Model<Api>) {
 	if (getApiProvider(model.api) !== builtinApiProviderInstances.get(model.api)) return undefined;
 	const provider = compatModels.getProvider(model.provider);
 	if (!provider) return undefined;
-	const catalogHasApi = provider.getModels().some((candidate) => candidate.api === model.api);
-	const cloudflareGatewaySupportsApi =
-		model.provider === "cloudflare-ai-gateway" && isCloudflareAIGatewayApi(model.api);
-	return catalogHasApi || cloudflareGatewaySupportsApi ? provider : undefined;
+	const supportsApi =
+		provider.supportsApi?.(model.api) ?? provider.getModels().some((candidate) => candidate.api === model.api);
+	return supportsApi ? provider : undefined;
 }
 
 function resolveApiProvider(api: Api) {

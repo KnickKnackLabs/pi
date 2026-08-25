@@ -11,10 +11,20 @@ export function hasCloudflareAiGatewayCredentials(): boolean {
 	);
 }
 
-/** Select a live catalog model with the capabilities required by the shared Cloudflare gateway integration tests. */
+function getCloudflareAiGatewayModels(): readonly Model<Api>[] {
+	return getBuiltinModels("cloudflare-ai-gateway") as readonly Model<Api>[];
+}
+
+/** Select any live Cloudflare gateway completions model for generic integration coverage. */
 export function getCloudflareAiGatewayCompletionsModel(): Model<"openai-completions"> | undefined {
-	const models = getBuiltinModels("cloudflare-ai-gateway") as readonly Model<Api>[];
-	return models.find(
+	return getCloudflareAiGatewayModels().find(
+		(model): model is Model<"openai-completions"> => model.api === "openai-completions",
+	);
+}
+
+/** Select a live Cloudflare gateway completions model for reasoning-specific integration coverage. */
+export function getCloudflareAiGatewayReasoningCompletionsModel(): Model<"openai-completions"> | undefined {
+	return getCloudflareAiGatewayModels().find(
 		(model): model is Model<"openai-completions"> => model.api === "openai-completions" && model.reasoning,
 	);
 }

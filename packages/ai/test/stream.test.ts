@@ -13,7 +13,7 @@ import { StringEnum } from "../src/utils/typebox-helpers.ts";
 import { hasAzureOpenAICredentials, resolveAzureDeploymentName } from "./azure-utils.ts";
 import { hasBedrockCredentials } from "./bedrock-utils.ts";
 import {
-	getCloudflareAiGatewayCompletionsModel,
+	getCloudflareAiGatewayReasoningCompletionsModel,
 	hasCloudflareAiGatewayCredentials,
 	hasCloudflareWorkersAICredentials,
 } from "./cloudflare-utils.ts";
@@ -645,9 +645,9 @@ describe("Generate E2E Tests", () => {
 		},
 	);
 
-	const cloudflareAiGatewayModel = getCloudflareAiGatewayCompletionsModel();
+	const cloudflareAiGatewayModel = getCloudflareAiGatewayReasoningCompletionsModel();
 	describe.skipIf(!hasCloudflareAiGatewayCredentials() || !cloudflareAiGatewayModel)(
-		"Cloudflare AI Gateway → catalog completions model via /compat",
+		"Cloudflare AI Gateway → reasoning completions model via /compat",
 		() => {
 			const llm = cloudflareAiGatewayModel!;
 
