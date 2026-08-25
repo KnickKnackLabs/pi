@@ -3,6 +3,7 @@ import type { AssistantMessage, ToolResultMessage, Usage } from "@earendil-works
 import { Container, Text, type TUI } from "@earendil-works/pi-tui";
 import { beforeAll, describe, expect, test, vi } from "vitest";
 import type { AgentSessionEvent } from "../../../src/core/agent-session.ts";
+import type { SessionMessageRenderContext } from "../../../src/core/extensions/types.ts";
 import type { SessionEntry } from "../../../src/core/session-manager.ts";
 import type { ToolExecutionComponent } from "../../../src/modes/interactive/components/tool-execution.ts";
 import { InteractiveMode } from "../../../src/modes/interactive/interactive-mode.ts";
@@ -35,6 +36,7 @@ type RenderSessionItems = (
 
 type RenderSessionContextThis = {
 	pendingTools: Map<string, ToolExecutionComponent>;
+	toolCallMessageRenderContexts: Map<string, SessionMessageRenderContext>;
 	chatContainer: Container;
 	footer: { invalidate(): void };
 	ui: TUI;
@@ -44,12 +46,17 @@ type RenderSessionContextThis = {
 		getShowCacheMissNotices(): boolean;
 	};
 	sessionManager: { getCwd(): string; getEntries(): SessionEntry[] };
-	session: { retryAttempt: number; modelRegistry: { find(provider: string, modelId: string): undefined } };
+	session: {
+		retryAttempt: number;
+		modelRegistry: { find(provider: string, modelId: string): undefined };
+		getMessageRenderContext(message: AgentMessage): SessionMessageRenderContext | undefined;
+	};
 	toolOutputExpanded: boolean;
 	isInitialized: boolean;
 	updateEditorBorderColor(): void;
 	getRegisteredToolDefinition(toolName: string): undefined;
 	addMessageToChat(message: AgentMessage, options?: { populateHistory?: boolean }): void;
+	applyPersistedMessageRenderContext(message: AgentMessage): void;
 	renderSessionItems: RenderSessionItems;
 };
 
@@ -65,6 +72,7 @@ function createFakeInteractiveModeThis(): RenderSessionContextThis {
 	const chatContainer = new Container();
 	return {
 		pendingTools: new Map<string, ToolExecutionComponent>(),
+		toolCallMessageRenderContexts: new Map<string, SessionMessageRenderContext>(),
 		chatContainer,
 		footer: { invalidate: vi.fn() },
 		ui: { requestRender: vi.fn() } as unknown as TUI,
@@ -74,11 +82,20 @@ function createFakeInteractiveModeThis(): RenderSessionContextThis {
 			getShowCacheMissNotices: () => false,
 		},
 		sessionManager: { getCwd: () => process.cwd(), getEntries: () => [] },
-		session: { retryAttempt: 0, modelRegistry: { find: () => undefined } },
+		session: {
+			retryAttempt: 0,
+			modelRegistry: { find: () => undefined },
+			getMessageRenderContext: () => ({ entryId: "persisted-tool-result" }),
+		},
 		toolOutputExpanded: false,
 		isInitialized: true,
 		updateEditorBorderColor: vi.fn(),
 		getRegisteredToolDefinition: (_toolName: string) => undefined,
+		applyPersistedMessageRenderContext: (
+			InteractiveMode.prototype as unknown as {
+				applyPersistedMessageRenderContext(message: AgentMessage): void;
+			}
+		).applyPersistedMessageRenderContext,
 		renderSessionItems: (InteractiveMode.prototype as unknown as { renderSessionItems: RenderSessionItems })
 			.renderSessionItems,
 		addMessageToChat(message: AgentMessage) {
@@ -159,6 +176,13 @@ describe("InteractiveMode.renderSessionEntries", () => {
 			toolName: TOOL_NAME,
 			result: { content: [{ type: "text", text: "FINAL_RESULT" }], details: undefined },
 			isError: false,
+		});
+
+		expect(fakeThis.pendingTools.has(TOOL_CALL_ID)).toBe(true);
+
+		await handleEvent.call(fakeThis, {
+			type: "message_end",
+			message: createToolResultMessage("FINAL_RESULT"),
 		});
 
 		expect(fakeThis.pendingTools.has(TOOL_CALL_ID)).toBe(false);

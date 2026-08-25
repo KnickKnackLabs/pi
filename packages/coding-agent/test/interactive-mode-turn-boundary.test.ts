@@ -27,6 +27,7 @@ function createFakeMode(contexts: TurnBoundaryContext[] = [], useBoundary = true
 		: [];
 	return {
 		chatContainer: new Container(),
+		liveMessageComponents: new WeakMap<AgentMessage, object>(),
 		createTurnBoundary,
 		getUserMessageText: (message: AgentMessage) =>
 			message.role === "user"
