@@ -207,8 +207,10 @@ For sessions with a parent (created via `/fork`, `/clone`, or `newSession({ pare
 
 A message in the conversation. The `message` field contains an `AgentMessage`.
 Tracked sessions may add `segmentNumber`, `segmentKind`, and, for user input, `inputKind` to message entries only.
-User and agent segments share one positive, monotonically increasing sequence within a session.
+User and agent segments share one positive, monotonically increasing allocation sequence within a session.
+Writers call `allocateSegment()` once when a segment starts, then reuse the returned metadata for every message in that segment.
 The allocator restores the highest number from the entire JSONL file, so rewinding and branching in that file never reuse a persisted number.
+Appending a valid externally supplied higher number advances future allocations past it.
 A fork copies existing numbers, then continues its own independent sequence.
 
 Writers accept these combinations:
@@ -406,25 +408,45 @@ for (const line of lines) {
 ## SessionManager API
 
 Key methods for working with sessions programmatically.
+The package root exports `SEGMENT_TRACKING_VERSION`, `SegmentKind`, `InputKind`, `SegmentMetadata`,
+`NewSessionOptions`, `AppendMessageOptions`, and `AppendAtOptions` with `SessionManager`.
+
+New sessions created by `create()`, `inMemory()`, or `newSession()` enable segment tracking by default.
+Opening or continuing a session preserves its header, while forks and branched sessions preserve the source tracking mode.
+`NewSessionOptions.segmentTrackingVersion: null` is reserved for deriving a new root from a known legacy session;
+ordinary new-session callers omit it.
+
+SDK writers allocate once when a conversation segment starts and reuse that metadata for every message in the segment.
+Legacy sessions return `undefined` from `allocateSegment()`, so callers that support both modes append without metadata in that case:
+
+```typescript
+const segment = session.allocateSegment("user");
+session.appendMessage(userMessage, segment ? { segment, inputKind: "normal" } : {});
+```
+
+Do not synthesize segment numbers for ordinary writes.
+If an importer supplies a valid higher number, `appendMessage()` reconciles the allocator so later allocations remain above every appended number.
 
 ### Static Creation Methods
-- `SessionManager.create(cwd, sessionDir?)` - New session
-- `SessionManager.open(path, sessionDir?)` - Open existing session file
-- `SessionManager.continueRecent(cwd, sessionDir?)` - Continue most recent or create new
-- `SessionManager.inMemory(cwd?)` - No file persistence
-- `SessionManager.forkFrom(sourcePath, targetCwd, sessionDir?)` - Fork session from another project
+- `SessionManager.create(cwd, sessionDir?, options?)` - Create a new tracked persisted session
+- `SessionManager.open(path, sessionDir?, cwdOverride?)` - Open a session without changing its tracking mode
+- `SessionManager.continueRecent(cwd, sessionDir?)` - Continue the most recent session, or create a new tracked session
+- `SessionManager.inMemory(cwd?, options?)` - Create a new tracked session without file persistence
+- `SessionManager.forkFrom(sourcePath, targetCwd, sessionDir?, options?)` - Fork a session and preserve its tracking mode
 
 ### Static Listing Methods
 - `SessionManager.list(cwd, sessionDir?, onProgress?)` - List sessions for a directory
 - `SessionManager.listAll(onProgress?)` - List all sessions across all projects
 
 ### Instance Methods - Session Management
-- `newSession(options?)` - Start a new session (options: `{ parentSession?: string }`)
-- `setSessionFile(path)` - Switch to a different session file
-- `createBranchedSession(leafId)` - Extract branch to new session file
+- `newSession(options?)` - Start a new tracked session, unless explicitly deriving from legacy mode
+- `setSessionFile(path)` - Switch to a different session file without changing its header
+- `createBranchedSession(leafId)` - Extract a branch and preserve the source tracking mode
 
-### Instance Methods - Appending (all return entry ID)
-- `appendMessage(message)` - Add message
+### Instance Methods - Appending (append methods return entry ID)
+- `allocateSegment(kind)` - Reserve the next user or agent segment; returns `undefined` for legacy sessions
+- `appendMessage(message, options?)` - Add a message with an optional allocated segment and valid `inputKind`
+- `appendMessageAt(parentId, message, options?)` - Add a message at a parent; also accepts `preserveLeaf`
 - `appendThinkingLevelChange(level)` - Record thinking change
 - `appendModelChange(provider, modelId)` - Record model change
 - `appendCompaction(summary, firstKeptEntryId, tokensBefore, details?, fromHook?)` - Add compaction

@@ -73,6 +73,23 @@ describe("SessionManager conversation segment tracking", () => {
 		]);
 	});
 
+	it("reconciles supplied numbers with future allocations while allowing repeated segment entries", () => {
+		const session = SessionManager.inMemory(tempDir);
+		session.appendMessage(
+			{ role: "user", content: "externally numbered", timestamp: 1 },
+			{
+				segment: { segmentNumber: 999, segmentKind: "user" },
+				inputKind: "normal",
+			},
+		);
+
+		const agentSegment = session.allocateSegment("agent")!;
+		expect(agentSegment).toEqual({ segmentNumber: 1000, segmentKind: "agent" });
+		session.appendMessage(fauxAssistantMessage("first"), { segment: agentSegment });
+		session.appendMessage(fauxAssistantMessage("second"), { segment: agentSegment });
+		expect(session.allocateSegment("user")).toEqual({ segmentNumber: 1001, segmentKind: "user" });
+	});
+
 	it("restores the maximum from the whole file and never reuses a branched-away number", () => {
 		const session = SessionManager.create(tempDir, sessionsDir, { id: "tracked-reload" });
 		const firstSegment = session.allocateSegment("user")!;

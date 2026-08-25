@@ -1117,10 +1117,23 @@ export class SessionManager {
 		}
 	}
 
+	private _reconcileAppendedSegment(entry: SessionEntry): void {
+		if (
+			entry.type !== "message" ||
+			typeof entry.segmentNumber !== "number" ||
+			!Number.isSafeInteger(entry.segmentNumber) ||
+			entry.segmentNumber < this.nextSegmentNumber
+		) {
+			return;
+		}
+		this.nextSegmentNumber = entry.segmentNumber + 1;
+	}
+
 	private _appendEntry(entry: SessionEntry): void {
 		this.fileEntries.push(entry);
 		this.byId.set(entry.id, entry);
 		this.leafId = this._leafIdAfterReplay(entry);
+		this._reconcileAppendedSegment(entry);
 		this._persist(entry);
 	}
 
