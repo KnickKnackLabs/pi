@@ -1,7 +1,7 @@
 import type { TextContent } from "@earendil-works/pi-ai";
 import type { Component } from "@earendil-works/pi-tui";
 import { Box, Container, Markdown, type MarkdownTheme, Spacer, Text } from "@earendil-works/pi-tui";
-import type { MessageRenderer } from "../../../core/extensions/types.ts";
+import type { MessageRenderer, SessionMessageRenderContext } from "../../../core/extensions/types.ts";
 import type { CustomMessage } from "../../../core/messages.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 
@@ -17,24 +17,32 @@ export class CustomMessageComponent extends Container {
 	private markdownTheme: MarkdownTheme;
 	private _expanded = false;
 	private outputPad: number;
+	private renderContext: SessionMessageRenderContext;
 
 	constructor(
 		message: CustomMessage<unknown>,
 		customRenderer?: MessageRenderer,
 		markdownTheme: MarkdownTheme = getMarkdownTheme(),
 		outputPad = 1,
+		renderContext: SessionMessageRenderContext = {},
 	) {
 		super();
 		this.message = message;
 		this.customRenderer = customRenderer;
 		this.markdownTheme = markdownTheme;
 		this.outputPad = outputPad;
+		this.renderContext = renderContext;
 
 		this.addChild(new Spacer(1));
 
 		// Create box with purple background (used for default rendering)
 		this.box = new Box(1, 1, (t) => theme.bg("customMessageBg", t));
 
+		this.rebuild();
+	}
+
+	setRenderContext(renderContext: SessionMessageRenderContext): void {
+		this.renderContext = renderContext;
 		this.rebuild();
 	}
 
@@ -70,7 +78,7 @@ export class CustomMessageComponent extends Container {
 			try {
 				const component = this.customRenderer(
 					this.message,
-					{ expanded: this._expanded, outputPad: this.outputPad },
+					{ ...this.renderContext, expanded: this._expanded, outputPad: this.outputPad },
 					theme,
 				);
 				if (component) {

@@ -153,7 +153,7 @@ export function collectCacheMisses(
 
 /**
  * Detect a cache miss on a just-completed assistant message.
- * `entries` must not yet contain `message` (message_end fires before persistence).
+ * `entries` must describe the session before `message` was persisted.
  */
 export function detectCacheMiss(
 	entries: SessionEntry[],

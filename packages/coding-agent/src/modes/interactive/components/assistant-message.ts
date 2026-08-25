@@ -4,6 +4,7 @@ import type {
 	BuiltInMessageRenderer,
 	BuiltInMessageRendererTransform,
 	MarkdownTransformer,
+	SessionMessageRenderContext,
 } from "../../../core/extensions/types.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { composeBuiltInMessageRenderer } from "./built-in-message-renderer.ts";
@@ -25,6 +26,7 @@ export class AssistantMessageComponent extends Container {
 	private markdownTransformers: readonly MarkdownTransformer[];
 	private renderer: BuiltInMessageRenderer<"assistant">;
 	private lastMessage?: AssistantMessage;
+	private renderContext: SessionMessageRenderContext;
 	private hasToolCalls = false;
 	private isStreaming = false;
 	private expanded = false;
@@ -37,6 +39,7 @@ export class AssistantMessageComponent extends Container {
 		outputPad = 1,
 		markdownTransformers: readonly MarkdownTransformer[] = [],
 		rendererTransforms: readonly BuiltInMessageRendererTransform<"assistant">[] = [],
+		renderContext: SessionMessageRenderContext = {},
 	) {
 		super();
 
@@ -45,6 +48,7 @@ export class AssistantMessageComponent extends Container {
 		this.hiddenThinkingLabel = hiddenThinkingLabel;
 		this.outputPad = outputPad;
 		this.markdownTransformers = markdownTransformers;
+		this.renderContext = renderContext;
 		this.renderer = composeBuiltInMessageRenderer(
 			(currentMessage, currentOptions) => ({
 				component: this.buildFallbackContent(currentMessage, currentOptions.outputPad),
@@ -64,6 +68,13 @@ export class AssistantMessageComponent extends Container {
 
 	override invalidate(): void {
 		super.invalidate();
+		if (this.lastMessage) {
+			this.updateContent(this.lastMessage);
+		}
+	}
+
+	setRenderContext(renderContext: SessionMessageRenderContext): void {
+		this.renderContext = renderContext;
 		if (this.lastMessage) {
 			this.updateContent(this.lastMessage);
 		}
@@ -116,7 +127,12 @@ export class AssistantMessageComponent extends Container {
 
 		const rendered = this.renderer(
 			message,
-			{ expanded: this.expanded, outputPad: this.outputPad, isStreaming: this.isStreaming },
+			{
+				...this.renderContext,
+				expanded: this.expanded,
+				outputPad: this.outputPad,
+				isStreaming: this.isStreaming,
+			},
 			theme,
 		);
 

@@ -84,6 +84,7 @@ import {
 	type SessionBeforeCompactResult,
 	type SessionBeforeTreeResult,
 	type SessionCompactFailedEvent,
+	type SessionMessageRenderContext,
 	type SessionStartEvent,
 	type ShutdownHandler,
 	type ToolDefinition,
@@ -115,6 +116,7 @@ import type {
 	SessionManager,
 } from "./session-manager.ts";
 import { getLatestCompactionEntry } from "./session-manager.ts";
+import { sessionMessageEntryToRenderContext } from "./session-message-render-context.ts";
 import type { SettingsManager } from "./settings-manager.ts";
 import type { SlashCommandInfo } from "./slash-commands.ts";
 import { createSyntheticSourceInfo } from "./source-info.ts";
@@ -348,6 +350,7 @@ export class AgentSession {
 	private _inputSources = new WeakMap<AgentMessage, InputSource>();
 	private _inputKinds = new WeakMap<AgentMessage, InputKind>();
 	private _userSegments = new WeakMap<AgentMessage, SegmentMetadata>();
+	private _messageRenderContexts = new WeakMap<AgentMessage, SessionMessageRenderContext>();
 	private _activeAgentSegment: AgentSegmentMetadata | undefined;
 	private _agentSegmentPending = false;
 	private _isAgentRunActive = false;
@@ -447,6 +450,19 @@ export class AgentSession {
 
 	get modelRuntime(): ModelRuntime {
 		return this._modelRuntime;
+	}
+
+	/** Return canonical renderer context after this exact in-memory message has been persisted. */
+	getMessageRenderContext(message: AgentMessage): SessionMessageRenderContext | undefined {
+		return this._messageRenderContexts.get(message);
+	}
+
+	private _recordPersistedMessage(message: AgentMessage, entryId: string): void {
+		const entry = this.sessionManager.getEntry(entryId);
+		if (entry?.type !== "message" && entry?.type !== "custom_message") {
+			throw new Error(`Persisted message entry ${entryId} is unavailable`);
+		}
+		this._messageRenderContexts.set(message, sessionMessageEntryToRenderContext(entry));
 	}
 
 	private async _getRequiredRequestAuth(model: Model<any>): Promise<{
@@ -745,40 +761,41 @@ export class AgentSession {
 			sessionEvent = event;
 		}
 
-		// Notify all listeners
-		this._emit(sessionEvent);
-
-		// Handle session persistence
+		// Persist completed messages before notifying public session listeners so live
+		// renderers can resolve the same canonical entry context used during replay.
 		if (event.type === "message_end") {
-			// Check if this is a custom message from extensions
 			if (event.message.role === "custom") {
-				// Persist as CustomMessageEntry
-				this.sessionManager.appendCustomMessageEntry(
+				const entryId = this.sessionManager.appendCustomMessageEntry(
 					event.message.customType,
 					event.message.content,
 					event.message.display,
 					event.message.details,
 				);
+				this._recordPersistedMessage(event.message, entryId);
 			} else if (
 				event.message.role === "user" ||
 				event.message.role === "assistant" ||
 				event.message.role === "toolResult"
 			) {
-				// Regular LLM message - persist as SessionMessageEntry
 				const segment =
 					event.message.role === "user" ? this._userSegments.get(event.message) : this._ensureActiveAgentSegment();
 				const inputKind = event.message.role === "user" ? this._inputKinds.get(event.message) : undefined;
-				this.sessionManager.appendMessage(
+				const entryId = this.sessionManager.appendMessage(
 					event.message,
 					this._segmentOptionsForMessage(event.message, segment, inputKind),
 				);
+				this._recordPersistedMessage(event.message, entryId);
 				if (event.message.role === "user") {
 					this._userSegments.delete(event.message);
 					this._inputKinds.delete(event.message);
 				}
 			}
-			// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
+			// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere.
+		}
 
+		this._emit(sessionEvent);
+
+		if (event.type === "message_end") {
 			// Track assistant message for auto-compaction (checked on agent_end)
 			if (event.message.role === "assistant") {
 				this._lastAssistantMessage = event.message;
@@ -837,7 +854,7 @@ export class AgentSession {
 	private _replaceMessageInPlace(target: AgentMessage, replacement: AgentMessage): void {
 		// Agent-core stores the finalized message object in its state before emitting message_end.
 		// SessionManager persistence happens later in _handleAgentEvent() with event.message.
-		// Mutating this object in place keeps agent state, later turn/agent events, listeners,
+		// Mutating this object in place keeps agent state, later turn/agent events, public listeners,
 		// and the eventual SessionManager.appendMessage(event.message) persistence in sync.
 		if (target === replacement) {
 			return;
@@ -1718,12 +1735,13 @@ export class AgentSession {
 			await this._runAgentPrompt(appMessage);
 		} else {
 			this.agent.state.messages.push(appMessage);
-			this.sessionManager.appendCustomMessageEntry(
+			const entryId = this.sessionManager.appendCustomMessageEntry(
 				message.customType,
 				message.content,
 				message.display,
 				message.details,
 			);
+			this._recordPersistedMessage(appMessage, entryId);
 			this._emit({ type: "message_start", message: appMessage });
 			this._emit({ type: "message_end", message: appMessage });
 		}

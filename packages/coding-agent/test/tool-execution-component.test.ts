@@ -3,7 +3,7 @@ import { Text, type TUI } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { beforeAll, describe, expect, test } from "vitest";
 import { getReadmePath } from "../src/config.ts";
-import type { RegisteredToolTransform, ToolDefinition } from "../src/core/extensions/types.ts";
+import type { RegisteredToolTransform, ToolDefinition, ToolRenderContext } from "../src/core/extensions/types.ts";
 import { createSyntheticSourceInfo } from "../src/core/source-info.ts";
 import { type BashOperations, createBashToolDefinition } from "../src/core/tools/bash.ts";
 import { createReadTool, createReadToolDefinition } from "../src/core/tools/read.ts";
@@ -35,6 +35,76 @@ function createFakeTui(): TUI {
 describe("ToolExecutionComponent parity", () => {
 	beforeAll(() => {
 		initTheme("dark");
+	});
+
+	test("passes separate call and result message contexts to tool renderers", () => {
+		type CapturedContext = Pick<ToolRenderContext, "toolCallId" | "callMessage" | "resultMessage">;
+		const contexts: Array<{ slot: "call" | "result"; context: CapturedContext }> = [];
+		const capture = (slot: "call" | "result", context: ToolRenderContext): void => {
+			contexts.push({
+				slot,
+				context: {
+					toolCallId: context.toolCallId,
+					callMessage: context.callMessage,
+					resultMessage: context.resultMessage,
+				},
+			});
+		};
+		const toolDefinition: ToolDefinition = {
+			...createBaseToolDefinition(),
+			renderCall: (_args, _theme, context) => {
+				capture("call", context);
+				return new Text("custom call", 0, 0);
+			},
+			renderResult: (_result, _options, _theme, context) => {
+				capture("result", context);
+				return new Text("custom result", 0, 0);
+			},
+		};
+		const component = new ToolExecutionComponent(
+			"custom_tool",
+			"tool-context",
+			{},
+			{},
+			toolDefinition,
+			createFakeTui(),
+			process.cwd(),
+			{ entryId: "assistant-entry", segmentNumber: 2, segmentKind: "agent" },
+		);
+
+		expect(contexts.at(-1)).toEqual({
+			slot: "call",
+			context: {
+				toolCallId: "tool-context",
+				callMessage: { entryId: "assistant-entry", segmentNumber: 2, segmentKind: "agent" },
+				resultMessage: undefined,
+			},
+		});
+
+		component.setResultMessageRenderContext({ entryId: "result-entry", segmentNumber: 2, segmentKind: "agent" });
+		component.updateResult({ content: [], details: {}, isError: false }, false);
+		expect(contexts.at(-1)).toEqual({
+			slot: "result",
+			context: {
+				toolCallId: "tool-context",
+				callMessage: { entryId: "assistant-entry", segmentNumber: 2, segmentKind: "agent" },
+				resultMessage: { entryId: "result-entry", segmentNumber: 2, segmentKind: "agent" },
+			},
+		});
+
+		component.setCallMessageRenderContext({
+			entryId: "updated-assistant-entry",
+			segmentNumber: 4,
+			segmentKind: "agent",
+		});
+		expect(contexts.at(-1)).toEqual({
+			slot: "result",
+			context: {
+				toolCallId: "tool-context",
+				callMessage: { entryId: "updated-assistant-entry", segmentNumber: 4, segmentKind: "agent" },
+				resultMessage: { entryId: "result-entry", segmentNumber: 2, segmentKind: "agent" },
+			},
+		});
 	});
 
 	test("stacks custom call and result renderers like the old implementation", () => {

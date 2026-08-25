@@ -150,6 +150,7 @@ export type {
 	SessionCompactFailedEvent,
 	SessionEvent,
 	SessionInfoChangedEvent,
+	SessionMessageRenderContext,
 	SessionShutdownEvent,
 	// Events - Session
 	SessionStartEvent,
@@ -171,6 +172,7 @@ export type {
 	ToolExecutionStartEvent,
 	ToolExecutionUpdateEvent,
 	ToolInfo,
+	ToolRenderContext,
 	ToolRenderResultOptions,
 	ToolResultEvent,
 	ToolResultEventResult,

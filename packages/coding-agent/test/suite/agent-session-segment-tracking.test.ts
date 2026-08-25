@@ -1,4 +1,4 @@
-import type { AgentTool } from "@earendil-works/pi-agent-core";
+import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
@@ -59,6 +59,63 @@ describe("AgentSession persisted conversation segments", () => {
 		expect(persistedMessages(harness)).toMatchObject([
 			{ segmentNumber: 1, segmentKind: "user", inputKind: "normal", message: { role: "user" } },
 			{ segmentNumber: 2, segmentKind: "agent", message: { role: "assistant" } },
+		]);
+	});
+
+	it("exposes canonical persisted renderer context when public message_end fires", async () => {
+		const harness = await createHarness();
+		harnesses.push(harness);
+		const observed: Array<{
+			role: AgentMessage["role"];
+			entryId?: string;
+			segmentNumber?: number;
+			segmentKind?: string;
+			inputKind?: string;
+			persistedType?: string;
+			persistedRole?: AgentMessage["role"];
+		}> = [];
+		harness.session.subscribe((event) => {
+			if (event.type !== "message_end") return;
+			const context = harness.session.getMessageRenderContext(event.message);
+			const entry = context?.entryId ? harness.sessionManager.getEntry(context.entryId) : undefined;
+			observed.push({
+				role: event.message.role,
+				...context,
+				persistedType: entry?.type,
+				persistedRole: entry?.type === "message" ? entry.message.role : undefined,
+			});
+		});
+		harness.setResponses([fauxAssistantMessage("hello")]);
+
+		await harness.session.prompt("hi");
+		await harness.session.sendCustomMessage({
+			customType: "notice",
+			content: "custom",
+			display: true,
+		});
+
+		expect(observed).toMatchObject([
+			{
+				role: "user",
+				entryId: expect.any(String),
+				segmentNumber: 1,
+				segmentKind: "user",
+				inputKind: "normal",
+				persistedRole: "user",
+			},
+			{
+				role: "assistant",
+				entryId: expect.any(String),
+				segmentNumber: 2,
+				segmentKind: "agent",
+				persistedType: "message",
+				persistedRole: "assistant",
+			},
+			{
+				role: "custom",
+				entryId: expect.any(String),
+				persistedType: "custom_message",
+			},
 		]);
 	});
 
