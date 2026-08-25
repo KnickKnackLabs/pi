@@ -1,10 +1,24 @@
-import { complete, resetApiProviders } from "@earendil-works/pi-ai/compat";
+import { complete, type Model, resetApiProviders } from "@earendil-works/pi-ai/compat";
+import { cloudflareAIGatewayProvider } from "@earendil-works/pi-ai/providers/cloudflare-ai-gateway";
 import { describe, expect, it, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { ModelRegistry } from "../src/core/model-registry.ts";
 import { ModelRuntime } from "../src/core/model-runtime.ts";
 
 const openAIState = vi.hoisted(() => ({ clientOptions: undefined as unknown }));
+
+const cloudflareCompletionsModel: Model<"openai-completions"> = {
+	id: "workers-ai/test-completions",
+	name: "Cloudflare completions test model",
+	api: "openai-completions",
+	provider: "cloudflare-ai-gateway",
+	baseUrl: "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/compat",
+	reasoning: true,
+	input: ["text"],
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	contextWindow: 128_000,
+	maxTokens: 8_192,
+};
 
 vi.mock("openai", () => {
 	class FakeOpenAI {
@@ -53,13 +67,17 @@ async function createCloudflareRuntime(): Promise<{ modelRuntime: ModelRuntime; 
 		},
 	}));
 	const modelRuntime = await ModelRuntime.create({ credentials: authStorage, modelsPath: null });
+	modelRuntime.registerNativeProvider({
+		...cloudflareAIGatewayProvider(),
+		getModels: () => [cloudflareCompletionsModel],
+	});
 	return { modelRuntime, modelRegistry: new ModelRegistry(modelRuntime) };
 }
 
 describe("ModelRegistry Cloudflare compat streaming", () => {
 	it("materializes the Cloudflare endpoint through ModelRuntime streaming", async () => {
 		const { modelRuntime } = await createCloudflareRuntime();
-		const model = modelRuntime.getModel("cloudflare-ai-gateway", "workers-ai/@cf/moonshotai/kimi-k2.6");
+		const model = modelRuntime.getModel("cloudflare-ai-gateway", cloudflareCompletionsModel.id);
 		expect(model).toBeDefined();
 
 		resetApiProviders();
@@ -75,7 +93,7 @@ describe("ModelRegistry Cloudflare compat streaming", () => {
 
 	it("materializes the Cloudflare endpoint after extension-style auth resolution", async () => {
 		const { modelRegistry } = await createCloudflareRuntime();
-		const model = modelRegistry.find("cloudflare-ai-gateway", "workers-ai/@cf/moonshotai/kimi-k2.6");
+		const model = modelRegistry.find("cloudflare-ai-gateway", cloudflareCompletionsModel.id);
 		expect(model).toBeDefined();
 
 		resetApiProviders();
