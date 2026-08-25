@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, parse } from "node:path";
 import { fauxAssistantMessage, fauxToolCall, registerFauxProvider } from "@earendil-works/pi-ai/compat";
@@ -11,7 +11,7 @@ import {
 	createAgentSessionServices,
 } from "../../src/core/agent-session-runtime.ts";
 import { AuthStorage } from "../../src/core/auth-storage.ts";
-import { SessionManager } from "../../src/core/session-manager.ts";
+import { CURRENT_SESSION_VERSION, SessionManager } from "../../src/core/session-manager.ts";
 import type {
 	AgentToolResult,
 	ExtensionAPI,
@@ -39,7 +39,7 @@ describe("AgentSessionRuntime characterization", () => {
 
 	async function createRuntimeForTest(
 		extensionFactory: ExtensionFactory,
-		options?: { cwd?: string; bootstrapModel?: boolean; bootstrapThinkingLevel?: boolean },
+		options?: { cwd?: string; bootstrapModel?: boolean; bootstrapThinkingLevel?: boolean; inMemory?: boolean },
 	) {
 		const tempDir =
 			options?.cwd ?? join(tmpdir(), `pi-runtime-suite-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -107,7 +107,7 @@ describe("AgentSessionRuntime characterization", () => {
 		const runtime = await createAgentSessionRuntime(createRuntime, {
 			cwd: tempDir,
 			agentDir: tempDir,
-			sessionManager: SessionManager.create(tempDir),
+			sessionManager: options?.inMemory ? SessionManager.inMemory(tempDir) : SessionManager.create(tempDir),
 		});
 		await runtime.session.bindExtensions({});
 
@@ -339,6 +339,78 @@ describe("AgentSessionRuntime characterization", () => {
 		const cancelAtResult = await runtime.fork("missing-entry", { position: "at" });
 		expect(cancelAtResult).toEqual({ cancelled: true });
 		expect(events).toEqual([{ type: "session_before_fork", entryId: "missing-entry", position: "at" }]);
+	});
+
+	it("keeps a legacy session untracked when forking before its first user entry", async () => {
+		const { runtime, tempDir } = await createRuntimeForTest(() => {});
+		const legacySessionFile = join(tempDir, "legacy-root-fork.jsonl");
+		const legacyEntries = [
+			{
+				type: "session",
+				version: CURRENT_SESSION_VERSION,
+				id: "legacy-root-fork",
+				timestamp: "2026-08-25T00:00:00.000Z",
+				cwd: tempDir,
+			},
+			{
+				type: "message",
+				id: "legacy-user",
+				parentId: null,
+				timestamp: "2026-08-25T00:00:01.000Z",
+				message: { role: "user", content: "legacy question", timestamp: 1 },
+			},
+			{
+				type: "message",
+				id: "legacy-assistant",
+				parentId: "legacy-user",
+				timestamp: "2026-08-25T00:00:02.000Z",
+				message: fauxAssistantMessage("legacy response"),
+			},
+		];
+		writeFileSync(legacySessionFile, `${legacyEntries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+
+		await runtime.switchSession(legacySessionFile);
+		await runtime.session.bindExtensions({});
+		const firstUser = runtime.session.getUserMessagesForForking()[0]!;
+		const result = await runtime.fork(firstUser.entryId);
+		expect(result).toEqual({ cancelled: false, selectedText: "legacy question" });
+		await runtime.session.bindExtensions({});
+
+		expect(runtime.session.sessionManager.getHeader()?.turnTrackingVersion).toBeUndefined();
+		expect(runtime.session.sessionManager.allocateTurn("user")).toBeUndefined();
+		await runtime.session.prompt("forked legacy prompt");
+
+		const forkedLines = readFileSync(runtime.session.sessionFile!, "utf8")
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line));
+		expect(forkedLines[0]).not.toHaveProperty("turnTrackingVersion");
+		for (const entry of forkedLines.filter((line) => line.type === "message")) {
+			expect(entry).not.toHaveProperty("turnNumber");
+			expect(entry).not.toHaveProperty("turnKind");
+			expect(entry).not.toHaveProperty("inputKind");
+		}
+	});
+
+	it("keeps a legacy in-memory session untracked when forking before its first user entry", async () => {
+		const { runtime } = await createRuntimeForTest(() => {}, { inMemory: true });
+		runtime.session.sessionManager.newSession({ turnTrackingVersion: null });
+		await runtime.session.prompt("legacy question");
+		const firstUser = runtime.session.getUserMessagesForForking()[0]!;
+
+		const result = await runtime.fork(firstUser.entryId);
+		expect(result).toEqual({ cancelled: false, selectedText: "legacy question" });
+		await runtime.session.bindExtensions({});
+
+		expect(runtime.session.sessionFile).toBeUndefined();
+		expect(runtime.session.sessionManager.getHeader()?.turnTrackingVersion).toBeUndefined();
+		expect(runtime.session.sessionManager.allocateTurn("user")).toBeUndefined();
+		await runtime.session.prompt("forked legacy prompt");
+		for (const entry of runtime.session.sessionManager.getEntries().filter((entry) => entry.type === "message")) {
+			expect(entry).not.toHaveProperty("turnNumber");
+			expect(entry).not.toHaveProperty("turnKind");
+			expect(entry).not.toHaveProperty("inputKind");
+		}
 	});
 
 	it("reports why an unflushed session cannot be forked", async () => {

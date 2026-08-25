@@ -52,6 +52,8 @@ export interface SessionHeader {
 export interface NewSessionOptions {
 	id?: string;
 	parentSession?: string;
+	/** Omit for new tracked sessions; pass null only when deriving from a legacy session. */
+	turnTrackingVersion?: typeof TURN_TRACKING_VERSION | null;
 }
 
 export interface AppendMessageOptions {
@@ -966,7 +968,7 @@ export class SessionManager {
 			timestamp,
 			cwd: this.cwd,
 			parentSession: options?.parentSession,
-			turnTrackingVersion: TURN_TRACKING_VERSION,
+			...(options?.turnTrackingVersion === null ? {} : { turnTrackingVersion: TURN_TRACKING_VERSION }),
 		};
 		this.fileEntries = [header];
 		this.byId.clear();
