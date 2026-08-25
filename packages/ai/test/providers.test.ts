@@ -386,16 +386,16 @@ describe("createProvider", () => {
 		expect(calls).toEqual(["a:model-a", "b:model-b"]);
 	});
 
-	it("reports arbitrary APIs as supported for a single implementation", () => {
+	it("reports known model APIs as supported for a single implementation", () => {
 		const provider = createProvider({
 			id: "single",
 			auth: { apiKey: { name: "Test", resolve: async () => ({ auth: {} }) } },
-			models: [],
+			models: [testModel("api-a", "model-a")],
 			api: recordingStreams("single", []),
 		});
 
 		expect(provider.supportsApi("api-a")).toBe(true);
-		expect(provider.supportsApi("api-ghost")).toBe(true);
+		expect(provider.supportsApi("api-ghost")).toBe(false);
 	});
 
 	it("merges provider-resolved env into stream options", async () => {

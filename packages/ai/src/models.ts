@@ -133,7 +133,7 @@ export interface Provider<TApi extends Api = Api> {
 	 */
 	filterModels?(models: readonly Model<TApi>[], credential: Credential | undefined): readonly Model<TApi>[];
 
-	/** Whether the provider has a runtime implementation for an API, independent of current catalog contents. */
+	/** Whether the provider's runtime dispatch accepts an API. */
 	supportsApi?(api: Api): boolean;
 
 	stream<T extends TApi>(
@@ -833,7 +833,10 @@ export function createProvider<TApi extends Api = Api>(input: CreateProviderOpti
 				}
 			: undefined,
 		filterModels: input.filterModels,
-		supportsApi: (api) => single !== undefined || (byApi !== undefined && Object.hasOwn(byApi, api)),
+		supportsApi: (api) =>
+			single !== undefined
+				? currentModels().some((model) => model.api === api)
+				: byApi !== undefined && Object.hasOwn(byApi, api),
 		stream: (model, context, options) => dispatch(model, (streams) => streams.stream(model, context, options)),
 		streamSimple: (model, context, options) =>
 			dispatch(model, (streams) => streams.streamSimple(model, context, options)),

@@ -6,19 +6,22 @@ import { CLOUDFLARE_AI_GATEWAY_MODELS } from "./cloudflare-ai-gateway.models.ts"
 import { cloudflareAIGatewayAuth } from "./cloudflare-auth.ts";
 import { cloudflareStreams } from "./cloudflare-stream.ts";
 
-const cloudflareAIGatewayApi = {
-	"anthropic-messages": cloudflareStreams(anthropicMessagesApi()),
-	"openai-completions": cloudflareStreams(openAICompletionsApi()),
-	"openai-responses": cloudflareStreams(openAIResponsesApi()),
-};
-type CloudflareAIGatewayApi = keyof typeof cloudflareAIGatewayApi;
+function createCloudflareAIGatewayApi() {
+	return {
+		"anthropic-messages": cloudflareStreams(anthropicMessagesApi()),
+		"openai-completions": cloudflareStreams(openAICompletionsApi()),
+		"openai-responses": cloudflareStreams(openAIResponsesApi()),
+	};
+}
+type CloudflareAIGatewayApi = keyof ReturnType<typeof createCloudflareAIGatewayApi>;
 
 export function cloudflareAIGatewayProvider(): Provider<CloudflareAIGatewayApi> {
+	const api = createCloudflareAIGatewayApi();
 	return createProvider<CloudflareAIGatewayApi>({
 		id: "cloudflare-ai-gateway",
 		name: "Cloudflare AI Gateway",
 		auth: { apiKey: cloudflareAIGatewayAuth() },
 		models: Object.values(CLOUDFLARE_AI_GATEWAY_MODELS),
-		api: cloudflareAIGatewayApi,
+		api,
 	});
 }
