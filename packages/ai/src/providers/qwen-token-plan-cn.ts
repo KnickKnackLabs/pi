@@ -10,6 +10,7 @@ export function qwenTokenPlanCnProvider(): Provider<"openai-completions"> {
 		baseUrl: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
 		auth: { apiKey: envApiKeyAuth("Qwen Token Plan CN API key", ["QWEN_TOKEN_PLAN_CN_API_KEY"]) },
 		models: Object.values(QWEN_TOKEN_PLAN_CN_MODELS),
+		apiId: "openai-completions",
 		api: openAICompletionsApi(),
 	});
 }

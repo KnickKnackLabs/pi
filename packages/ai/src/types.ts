@@ -280,11 +280,6 @@ export interface ProviderStreams {
 	cancelDeferred?(model: Model<Api>, handle: DeferredHandle, options?: DeferredCancelOptions): Promise<void>;
 }
 
-/** A single API implementation with the runtime identity used for provider dispatch. */
-export interface IdentifiedProviderStreams<TApi extends Api = Api> extends ProviderStreams {
-	readonly api: TApi;
-}
-
 /**
  * The uniform contract of an image-generation API implementation module:
  * every image API module under `src/api/` exports exactly `generateImages`,

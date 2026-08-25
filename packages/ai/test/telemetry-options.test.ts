@@ -91,7 +91,6 @@ describe("ProviderRequestOptions.telemetryContext", () => {
 			auth: { apiKey: { name: "Test", resolve: async () => ({ auth: {} }) } },
 			models: [model],
 			api: {
-				api: model.api,
 				stream: (requestModel, _context, options) => {
 					observed.push(options?.telemetryContext);
 					return completedStream(requestModel);

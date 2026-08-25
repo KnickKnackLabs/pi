@@ -17,7 +17,6 @@ import type {
 	DeferredCancelOptions,
 	DeferredFetchOptions,
 	DeferredHandle,
-	IdentifiedProviderStreams,
 	Model,
 	ProviderStreams,
 } from "../src/types.ts";
@@ -327,14 +326,6 @@ describe("createProvider", () => {
 		return { stream: respond, streamSimple: respond };
 	}
 
-	function identifiedStreams<TApi extends Api>(
-		api: TApi,
-		label: string,
-		calls: string[],
-	): IdentifiedProviderStreams<TApi> {
-		return { api, ...recordingStreams(label, calls) };
-	}
-
 	function testModel<TApi extends Api>(api: TApi, id: string): Model<TApi> {
 		return {
 			id,
@@ -355,7 +346,6 @@ describe("createProvider", () => {
 		const streams = recordingStreams("deferred", []);
 		streams.fetchDeferred = (model) => streams.streamSimple(model, context);
 		const api = lazyApi(
-			"api-a",
 			async () => {
 				loads++;
 				return streams;
@@ -396,13 +386,14 @@ describe("createProvider", () => {
 		expect(calls).toEqual(["a:model-a", "b:model-b"]);
 	});
 
-	it("routes custom models through an identified single implementation with an empty catalog", async () => {
+	it("routes custom models through an explicitly identified single implementation with an empty catalog", async () => {
 		const calls: string[] = [];
 		const provider = createProvider<Api>({
 			id: "single",
 			auth: { apiKey: { name: "Test", resolve: async () => ({ auth: {} }) } },
 			models: [],
-			api: identifiedStreams("api-a", "single", calls),
+			apiId: "api-a",
+			api: recordingStreams("single", calls),
 		});
 
 		expect(provider.getModels()).toEqual([]);
@@ -413,6 +404,37 @@ describe("createProvider", () => {
 		expect(unsupported.stopReason).toBe("error");
 		expect(unsupported.errorMessage).toContain("no API implementation");
 		expect(calls).toEqual(["single:custom-model"]);
+	});
+
+	it("infers one baseline API for legacy raw single implementations", async () => {
+		const calls: string[] = [];
+		const model = testModel("api-a", "model-a");
+		const provider = createProvider({
+			id: "legacy-single",
+			auth: { apiKey: { name: "Test", resolve: async () => ({ auth: {} }) } },
+			models: [model],
+			api: recordingStreams("legacy", calls),
+		});
+
+		expect(provider.supportsApi("api-a")).toBe(true);
+		await provider.streamSimple(model, context).result();
+		expect(calls).toEqual(["legacy:model-a"]);
+	});
+
+	it("requires apiId when baseline models cannot identify one single API", () => {
+		const base = {
+			id: "unidentified-single",
+			auth: { apiKey: { name: "Test", resolve: async () => ({ auth: {} }) } },
+			api: recordingStreams("single", []),
+		};
+
+		expect(() => createProvider<Api>({ ...base, models: [] })).toThrow("must declare apiId");
+		expect(() =>
+			createProvider<Api>({
+				...base,
+				models: [testModel("api-a", "model-a"), testModel("api-b", "model-b")],
+			}),
+		).toThrow("must declare apiId");
 	});
 
 	it("merges provider-resolved env into stream options", async () => {
@@ -432,7 +454,6 @@ describe("createProvider", () => {
 			},
 			models: [envModel],
 			api: {
-				api: "api-a",
 				stream: (model, _context, options) => {
 					capturedEnv = options?.env;
 					capturedApiKey = options?.apiKey;
@@ -462,7 +483,7 @@ describe("createProvider", () => {
 		let fetchedOptions: DeferredFetchOptions | undefined;
 		let cancelledOptions: DeferredCancelOptions | undefined;
 		const deferredModel = { ...testModel("api-a", "model-a"), provider: "deferred-provider" };
-		const streams = identifiedStreams("api-a", "deferred", []);
+		const streams = recordingStreams("deferred", []);
 		streams.fetchDeferred = (model, _handle, options) => {
 			fetchedModel = model;
 			fetchedOptions = options;
@@ -558,6 +579,7 @@ describe("createProvider", () => {
 			id: "dynamic",
 			auth: { apiKey: { name: "Test", resolve: async () => ({ auth: {} }) } },
 			models: [],
+			apiId: "api-a",
 			fetchModels: async () => {
 				fetches++;
 				const current = fetches;
@@ -567,7 +589,7 @@ describe("createProvider", () => {
 				}
 				return [testModel("api-a", `listed-${current}`)];
 			},
-			api: identifiedStreams("api-a", "a", []),
+			api: recordingStreams("a", []),
 		});
 
 		const store = new InMemoryModelsStore();

@@ -10,6 +10,7 @@ export function xiaomiTokenPlanSgpProvider(): Provider<"openai-completions"> {
 		baseUrl: "https://token-plan-sgp.xiaomimimo.com/v1",
 		auth: { apiKey: envApiKeyAuth("Xiaomi Token Plan SGP API key", ["XIAOMI_TOKEN_PLAN_SGP_API_KEY"]) },
 		models: Object.values(XIAOMI_TOKEN_PLAN_SGP_MODELS),
+		apiId: "openai-completions",
 		api: openAICompletionsApi(),
 	});
 }

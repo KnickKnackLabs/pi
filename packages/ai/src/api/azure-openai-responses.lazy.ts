@@ -1,5 +1,4 @@
-import type { IdentifiedProviderStreams } from "../types.ts";
+import type { ProviderStreams } from "../types.ts";
 import { lazyApi } from "./lazy.ts";
 
-export const azureOpenAIResponsesApi = (): IdentifiedProviderStreams<"azure-openai-responses"> =>
-	lazyApi("azure-openai-responses", () => import("./azure-openai-responses.ts"));
+export const azureOpenAIResponsesApi = (): ProviderStreams => lazyApi(() => import("./azure-openai-responses.ts"));

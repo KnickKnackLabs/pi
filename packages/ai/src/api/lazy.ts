@@ -1,11 +1,4 @@
-import type {
-	Api,
-	AssistantMessage,
-	AssistantMessageEvent,
-	IdentifiedProviderStreams,
-	Model,
-	ProviderStreams,
-} from "../types.ts";
+import type { Api, AssistantMessage, AssistantMessageEvent, Model, ProviderStreams } from "../types.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 
 function createSetupErrorMessage(model: Model<Api>, error: unknown): AssistantMessage {
@@ -68,7 +61,7 @@ export function lazyStream(
 }
 
 /**
- * Wraps a dynamically imported API implementation module as identified streams.
+ * Wraps a dynamically imported API implementation module as `ProviderStreams`.
  * The module loads on first stream call; the host's import cache deduplicates
  * loads. Load failures terminate the returned stream with an error event.
  */
@@ -77,13 +70,8 @@ export interface LazyApiCapabilities {
 	cancelDeferred?: boolean;
 }
 
-export function lazyApi<TApi extends Api>(
-	api: TApi,
-	load: () => Promise<ProviderStreams>,
-	capabilities?: LazyApiCapabilities,
-): IdentifiedProviderStreams<TApi> {
-	const streams: IdentifiedProviderStreams<TApi> = {
-		api,
+export function lazyApi(load: () => Promise<ProviderStreams>, capabilities?: LazyApiCapabilities): ProviderStreams {
+	const streams: ProviderStreams = {
 		stream: (model, context, options) =>
 			lazyStream(model, async () => (await load()).stream(model, context, options)),
 		streamSimple: (model, context, options) =>
