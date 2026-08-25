@@ -1206,7 +1206,12 @@ export class SessionManager {
 			parentId,
 			timestamp: new Date().toISOString(),
 			message,
-			...(options.segment ?? {}),
+			...(options.segment
+				? {
+						segmentNumber: options.segment.segmentNumber,
+						segmentKind: options.segment.segmentKind,
+					}
+				: {}),
 			...(options.inputKind ? { inputKind: options.inputKind } : {}),
 		};
 		if (options.preserveLeaf) {

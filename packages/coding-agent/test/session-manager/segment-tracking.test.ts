@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { BashExecutionMessage, CustomMessage } from "../../src/core/messages.ts";
 import { exportSessionToJsonl } from "../../src/core/session-export.ts";
 import {
+	type AgentSegmentMetadata,
 	type AppendMessageOptions,
 	SEGMENT_TRACKING_VERSION,
 	SessionManager,
@@ -88,6 +89,37 @@ describe("SessionManager conversation segment tracking", () => {
 		session.appendMessage(fauxAssistantMessage("first"), { segment: agentSegment });
 		session.appendMessage(fauxAssistantMessage("second"), { segment: agentSegment });
 		expect(session.allocateSegment("user")).toEqual({ segmentNumber: 1001, segmentKind: "user" });
+	});
+
+	it("copies only validated segment fields from public append input", () => {
+		const session = SessionManager.inMemory(tempDir);
+		const assistant = fauxAssistantMessage("trusted message");
+		const forgedSegment = {
+			segmentNumber: 7,
+			segmentKind: "agent",
+			type: "custom",
+			id: "forged-id",
+			parentId: "forged-parent",
+			timestamp: "forged-time",
+			message: { role: "user", content: "forged message", timestamp: 1 },
+			inputKind: "steer",
+			leafIdAfter: "forged-leaf",
+		} as unknown as AgentSegmentMetadata;
+
+		const entryId = session.appendMessage(assistant, { segment: forgedSegment });
+		const entry = session.getEntry(entryId);
+		expect(entryId).not.toBe("forged-id");
+		expect(entry).toMatchObject({
+			type: "message",
+			id: entryId,
+			parentId: null,
+			message: assistant,
+			segmentNumber: 7,
+			segmentKind: "agent",
+		});
+		expect(entry?.timestamp).not.toBe("forged-time");
+		expect(entry).not.toHaveProperty("inputKind");
+		expect(entry).not.toHaveProperty("leafIdAfter");
 	});
 
 	it("restores the maximum from the whole file and never reuses a branched-away number", () => {
