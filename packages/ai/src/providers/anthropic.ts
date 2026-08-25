@@ -54,6 +54,7 @@ export function anthropicProvider(): Provider<"anthropic-messages"> {
 			}),
 		},
 		models: Object.values(ANTHROPIC_MODELS),
+		apiId: "anthropic-messages",
 		api: anthropicMessagesApi(),
 	});
 }

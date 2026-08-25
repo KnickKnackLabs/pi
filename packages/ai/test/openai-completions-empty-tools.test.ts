@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getModel, streamSimple } from "../src/compat.ts";
+import { createModels } from "../src/models.ts";
+import { cloudflareAIGatewayProvider } from "../src/providers/cloudflare-ai-gateway.ts";
+import type { Model } from "../src/types.ts";
 
 // Empty tools arrays must NOT be serialized as `tools: []` — some OpenAI-compatible
 // backends (e.g. DashScope / Aliyun Qwen via compatible-mode) reject the request with
@@ -10,6 +13,20 @@ const mockState = vi.hoisted(() => ({
 	lastParams: undefined as unknown,
 	lastClientOptions: undefined as unknown,
 }));
+
+const cloudflareCompletionsModel: Model<"openai-completions"> = {
+	id: "workers-ai/test-completions",
+	name: "Cloudflare completions test model",
+	api: "openai-completions",
+	provider: "cloudflare-ai-gateway",
+	baseUrl: "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/compat",
+	reasoning: true,
+	input: ["text"],
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	contextWindow: 128_000,
+	maxTokens: 8_192,
+	compat: { sendSessionAffinityHeaders: true },
+};
 
 vi.mock("openai", () => {
 	class FakeOpenAI {
@@ -164,16 +181,20 @@ describe("openai-completions empty tools handling", () => {
 		process.env.CLOUDFLARE_API_KEY = "cf-token";
 		process.env.CLOUDFLARE_ACCOUNT_ID = "account-id";
 		process.env.CLOUDFLARE_GATEWAY_ID = "gateway-id";
-		const model = getModel("cloudflare-ai-gateway", "workers-ai/@cf/moonshotai/kimi-k2.6")!;
+		const model = cloudflareCompletionsModel;
+		const models = createModels();
+		models.setProvider(cloudflareAIGatewayProvider());
 
-		await streamSimple(
-			model,
-			{
-				systemPrompt: "You are helpful.",
-				messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
-			},
-			{ maxTokens: 1234, reasoning: "high" },
-		).result();
+		await models
+			.streamSimple(
+				model,
+				{
+					systemPrompt: "You are helpful.",
+					messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
+				},
+				{ maxTokens: 1234, reasoning: "high" },
+			)
+			.result();
 
 		const params = mockState.lastParams as {
 			messages: Array<{ role: string }>;
@@ -201,11 +222,15 @@ describe("openai-completions empty tools handling", () => {
 		process.env.CLOUDFLARE_API_KEY = "cf-token";
 		process.env.CLOUDFLARE_ACCOUNT_ID = "account-id";
 		process.env.CLOUDFLARE_GATEWAY_ID = "gateway-id";
-		const model = getModel("cloudflare-ai-gateway", "workers-ai/@cf/moonshotai/kimi-k2.6")!;
+		const model = cloudflareCompletionsModel;
+		const models = createModels();
+		models.setProvider(cloudflareAIGatewayProvider());
 
-		await streamSimple(model, {
-			messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
-		}).result();
+		await models
+			.streamSimple(model, {
+				messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
+			})
+			.result();
 
 		const clientOptions = mockState.lastClientOptions as { baseURL?: string };
 		expect(clientOptions.baseURL).toBe("https://gateway.ai.cloudflare.com/v1/account-id/gateway-id/compat");
@@ -234,15 +259,19 @@ describe("openai-completions empty tools handling", () => {
 		process.env.CLOUDFLARE_API_KEY = "cf-token";
 		process.env.CLOUDFLARE_ACCOUNT_ID = "account-id";
 		process.env.CLOUDFLARE_GATEWAY_ID = "gateway-id";
-		const workersModel = getModel("cloudflare-ai-gateway", "workers-ai/@cf/moonshotai/kimi-k2.6")!;
+		const workersModel = cloudflareCompletionsModel;
+		const models = createModels();
+		models.setProvider(cloudflareAIGatewayProvider());
 
-		await streamSimple(
-			workersModel,
-			{
-				messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
-			},
-			{ sessionId: "session-1" },
-		).result();
+		await models
+			.streamSimple(
+				workersModel,
+				{
+					messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
+				},
+				{ sessionId: "session-1" },
+			)
+			.result();
 
 		const clientOptions = mockState.lastClientOptions as { defaultHeaders?: Record<string, string> };
 		expect(clientOptions.defaultHeaders?.session_id).toBe("session-1");

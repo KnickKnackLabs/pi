@@ -326,7 +326,7 @@ describe("createProvider", () => {
 		return { stream: respond, streamSimple: respond };
 	}
 
-	function testModel(api: string, id: string): Model<Api> {
+	function testModel<TApi extends Api>(api: TApi, id: string): Model<TApi> {
 		return {
 			id,
 			name: id,
@@ -368,18 +368,73 @@ describe("createProvider", () => {
 
 	it("dispatches on model.api for mixed-API providers", async () => {
 		const calls: string[] = [];
-		const provider = createProvider({
+		const provider = createProvider<"api-a" | "api-b">({
 			id: "mixed",
 			auth: { apiKey: { name: "Test", resolve: async () => ({ auth: {} }) } },
-			models: [testModel("api-a", "model-a"), testModel("api-b", "model-b")],
+			models: [testModel("api-a", "model-a")],
 			api: { "api-a": recordingStreams("a", calls), "api-b": recordingStreams("b", calls) },
 		});
 		const models = createModels();
 		models.setProvider(provider);
 
+		expect(provider.supportsApi("api-a")).toBe(true);
+		expect(provider.supportsApi("api-b")).toBe(true);
+		expect(provider.supportsApi("api-ghost")).toBe(false);
+		expect(provider.supportsApi("toString")).toBe(false);
 		await models.completeSimple(testModel("api-a", "model-a"), context);
 		await models.completeSimple(testModel("api-b", "model-b"), context);
 		expect(calls).toEqual(["a:model-a", "b:model-b"]);
+	});
+
+	it("routes custom models through an explicitly identified single implementation with an empty catalog", async () => {
+		const calls: string[] = [];
+		const provider = createProvider<Api>({
+			id: "single",
+			auth: { apiKey: { name: "Test", resolve: async () => ({ auth: {} }) } },
+			models: [],
+			apiId: "api-a",
+			api: recordingStreams("single", calls),
+		});
+
+		expect(provider.getModels()).toEqual([]);
+		expect(provider.supportsApi("api-a")).toBe(true);
+		expect(provider.supportsApi("api-ghost")).toBe(false);
+		await provider.streamSimple(testModel("api-a", "custom-model"), context).result();
+		const unsupported = await provider.streamSimple(testModel("api-ghost", "wrong-api"), context).result();
+		expect(unsupported.stopReason).toBe("error");
+		expect(unsupported.errorMessage).toContain("no API implementation");
+		expect(calls).toEqual(["single:custom-model"]);
+	});
+
+	it("infers one baseline API for legacy raw single implementations", async () => {
+		const calls: string[] = [];
+		const model = testModel("api-a", "model-a");
+		const provider = createProvider({
+			id: "legacy-single",
+			auth: { apiKey: { name: "Test", resolve: async () => ({ auth: {} }) } },
+			models: [model],
+			api: recordingStreams("legacy", calls),
+		});
+
+		expect(provider.supportsApi("api-a")).toBe(true);
+		await provider.streamSimple(model, context).result();
+		expect(calls).toEqual(["legacy:model-a"]);
+	});
+
+	it("requires apiId when baseline models cannot identify one single API", () => {
+		const base = {
+			id: "unidentified-single",
+			auth: { apiKey: { name: "Test", resolve: async () => ({ auth: {} }) } },
+			api: recordingStreams("single", []),
+		};
+
+		expect(() => createProvider<Api>({ ...base, models: [] })).toThrow("must declare apiId");
+		expect(() =>
+			createProvider<Api>({
+				...base,
+				models: [testModel("api-a", "model-a"), testModel("api-b", "model-b")],
+			}),
+		).toThrow("must declare apiId");
 	});
 
 	it("merges provider-resolved env into stream options", async () => {
@@ -499,7 +554,7 @@ describe("createProvider", () => {
 	});
 
 	it("produces a stream error for a model whose api has no implementation", async () => {
-		const provider = createProvider({
+		const provider = createProvider<"api-a" | "api-ghost">({
 			id: "mixed",
 			auth: { apiKey: { name: "Test", resolve: async () => ({ auth: {} }) } },
 			models: [testModel("api-a", "model-a")],
@@ -524,6 +579,7 @@ describe("createProvider", () => {
 			id: "dynamic",
 			auth: { apiKey: { name: "Test", resolve: async () => ({ auth: {} }) } },
 			models: [],
+			apiId: "api-a",
 			fetchModels: async () => {
 				fetches++;
 				const current = fetches;

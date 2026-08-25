@@ -1021,6 +1021,7 @@ const ollama = createProvider({
   // Every provider declares auth; keyless local servers resolve as configured with no key.
   auth: { apiKey: { name: 'Ollama', resolve: async () => ({ auth: {} }) } },
   models: [ollamaModel],
+  apiId: 'openai-completions',
   api: openAICompletionsApi(),
 });
 
@@ -1037,9 +1038,12 @@ const proxy = createProvider({
   id: 'my-proxy',
   auth: { apiKey: envApiKeyAuth('My proxy API key', ['MY_PROXY_API_KEY']) },
   models: [/* ... */],
+  apiId: 'openai-completions',
   api: openAICompletionsApi(),
 });
 ```
+
+A single implementation's `apiId` is its dispatch identity. Existing callers may omit it only when all static baseline models identify one API; empty, dynamic, or ambiguous catalogs must declare it. Mixed-API providers do not use `apiId`: their map keys are the sole dispatch identity.
 
 Mixed-API providers pass a map keyed by `model.api`; each model dispatches to its API's implementation:
 
@@ -1073,6 +1077,7 @@ const tenantGateway = createProvider({
   id: 'tenant-gateway',
   auth: { apiKey: envApiKeyAuth('Gateway key', ['GATEWAY_API_KEY']) },
   models: [/* ... */],
+  apiId: 'openai-completions',
   api: tenantStreams(openAICompletionsApi()),
 });
 ```
@@ -1085,6 +1090,7 @@ const llamacpp = createProvider({
   id: 'llamacpp',
   auth: { apiKey: { name: 'llama.cpp', resolve: async () => ({ auth: {} }) } },
   models: [],
+  apiId: 'openai-completions',
   fetchModels: async ({ signal }) => fetchModelsFromServer('http://localhost:8080', signal),
   api: openAICompletionsApi(),
 });

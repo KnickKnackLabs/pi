@@ -698,6 +698,7 @@ describe("default model selection", () => {
 	test("openai defaults track current models", () => {
 		expect(defaultModelPerProvider.openai).toBe("gpt-5.5");
 		expect(defaultModelPerProvider["openai-codex"]).toBe("gpt-5.5");
+		expect(defaultModelPerProvider["cloudflare-ai-gateway"]).toBe("gpt-5.5");
 	});
 
 	test("zai, minimax, cerebras, and ant-ling defaults track current models", () => {

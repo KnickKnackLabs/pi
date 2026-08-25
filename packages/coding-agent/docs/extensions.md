@@ -1876,6 +1876,7 @@ const provider = createProvider({
     },
   },
   models: [],
+  apiId: "openai-completions",
   api: openAICompletionsApi(),
 });
 

@@ -10,6 +10,7 @@ export function antLingProvider(): Provider<"openai-completions"> {
 		baseUrl: "https://api.ant-ling.com/v1",
 		auth: { apiKey: envApiKeyAuth("Ant Ling API key", ["ANT_LING_API_KEY"]) },
 		models: Object.values(ANT_LING_MODELS),
+		apiId: "openai-completions",
 		api: openAICompletionsApi(),
 	});
 }

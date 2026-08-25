@@ -10,6 +10,7 @@ export function zaiCodingCnProvider(): Provider<"openai-completions"> {
 		baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4",
 		auth: { apiKey: envApiKeyAuth("Z.AI Coding CN API key", ["ZAI_CODING_CN_API_KEY"]) },
 		models: Object.values(ZAI_CODING_CN_MODELS),
+		apiId: "openai-completions",
 		api: openAICompletionsApi(),
 	});
 }

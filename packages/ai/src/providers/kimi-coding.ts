@@ -19,6 +19,7 @@ export function kimiCodingProvider(): Provider<"anthropic-messages"> {
 			}),
 		},
 		models: Object.values(KIMI_CODING_MODELS),
+		apiId: "anthropic-messages",
 		api: anthropicMessagesApi(),
 	});
 }

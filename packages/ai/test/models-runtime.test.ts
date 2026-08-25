@@ -301,6 +301,7 @@ describe("Models runtime", () => {
 				},
 			},
 			models: [],
+			apiId: "test-api",
 			fetchModels: async () => {
 				throw new Error("must not fetch");
 			},
@@ -371,6 +372,7 @@ describe("Models runtime", () => {
 				id: "dynamic",
 				auth: { apiKey: envKeyAuth(undefined) },
 				models: [],
+				apiId: "test-api",
 				fetchModels: fetchModels ? () => fetchModels() : undefined,
 				api: {
 					stream: () => new AssistantMessageEventStream(),

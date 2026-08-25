@@ -10,6 +10,7 @@ export function cerebrasProvider(): Provider<"openai-completions"> {
 		baseUrl: "https://api.cerebras.ai/v1",
 		auth: { apiKey: envApiKeyAuth("Cerebras API key", ["CEREBRAS_API_KEY"]) },
 		models: Object.values(CEREBRAS_MODELS),
+		apiId: "openai-completions",
 		api: openAICompletionsApi(),
 	});
 }
