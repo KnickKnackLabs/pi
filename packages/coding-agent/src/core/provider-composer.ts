@@ -450,7 +450,11 @@ export function composeModelProvider(
 	const oauth = composeOAuthAuth(providerId, base, config, extension);
 	if (!apiKey && !oauth) throw new Error(`Provider ${providerId}: no authentication method configured.`);
 
-	const supportsBaseApi = (model: Model<Api>) => base?.getModels().some((entry) => entry.api === model.api) ?? false;
+	const supportsBaseApi = (api: Api) =>
+		base?.supportsApi?.(api) ?? base?.getModels().some((entry) => entry.api === api) ?? false;
+	const supportsExtensionApi = (api: Api) => extension?.streamSimple !== undefined && extension.api === api;
+	const supportsApi = (api: Api) =>
+		supportsExtensionApi(api) || supportsBaseApi(api) || getApiProvider(api) !== undefined;
 	const streamWith = (
 		model: Model<Api>,
 		context: Context,
@@ -461,7 +465,7 @@ export function composeModelProvider(
 			if (extension?.streamSimple && model.api === extension.api) {
 				return extension.streamSimple(model, context, options as SimpleStreamOptions);
 			}
-			if (base && supportsBaseApi(model)) {
+			if (base && supportsBaseApi(model.api)) {
 				return simple
 					? base.streamSimple(model, context, options as SimpleStreamOptions)
 					: base.stream(model, context, options);
@@ -506,6 +510,7 @@ export function composeModelProvider(
 		filterModels: base?.filterModels
 			? (models, credential: Credential | undefined) => base.filterModels!(models, credential)
 			: undefined,
+		supportsApi,
 		stream: (model, context, options) => streamWith(model, context, options, false),
 		streamSimple: (model, context, options) => streamWith(model, context, options, true),
 	};

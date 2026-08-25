@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { complete, type Model, resetApiProviders } from "@earendil-works/pi-ai/compat";
 import { cloudflareAIGatewayProvider } from "@earendil-works/pi-ai/providers/cloudflare-ai-gateway";
 import { describe, expect, it, vi } from "vitest";
@@ -116,5 +119,53 @@ describe("ModelRegistry Cloudflare compat streaming", () => {
 		expect(clientOptions.defaultHeaders?.["cf-aig-authorization"]).toBe("Bearer test-token");
 		expect(clientOptions.defaultHeaders?.Authorization).toBeNull();
 		expect(clientOptions.defaultHeaders?.["x-api-key"]).toBeNull();
+	});
+
+	it("routes a models.json API through the base provider when its catalog is empty", async () => {
+		const tempDir = mkdtempSync(join(tmpdir(), "pi-cloudflare-composer-"));
+		const modelsPath = join(tempDir, "models.json");
+		writeFileSync(
+			modelsPath,
+			JSON.stringify({
+				providers: {
+					"cloudflare-ai-gateway": { models: [cloudflareCompletionsModel] },
+				},
+			}),
+		);
+		try {
+			const authStorage = AuthStorage.inMemory();
+			await authStorage.modify("cloudflare-ai-gateway", async () => ({
+				type: "api_key",
+				key: "test-token",
+				env: {
+					CLOUDFLARE_ACCOUNT_ID: "test-account",
+					CLOUDFLARE_GATEWAY_ID: "test-gateway",
+				},
+			}));
+			const modelRuntime = await ModelRuntime.create({
+				credentials: authStorage,
+				modelsPath,
+				allowModelNetwork: false,
+			});
+			modelRuntime.registerNativeProvider({
+				...cloudflareAIGatewayProvider(),
+				getModels: () => [],
+			});
+			const model = modelRuntime.getModel("cloudflare-ai-gateway", cloudflareCompletionsModel.id);
+			expect(model).toBeDefined();
+			expect(modelRuntime.getProvider("cloudflare-ai-gateway")?.supportsApi?.("openai-completions")).toBe(true);
+
+			resetApiProviders();
+			await modelRuntime.completeSimple(model!, { messages: [] });
+
+			const clientOptions = openAIState.clientOptions as {
+				baseURL?: string;
+				defaultHeaders?: Record<string, unknown>;
+			};
+			expect(clientOptions.baseURL).toBe("https://gateway.ai.cloudflare.com/v1/test-account/test-gateway/compat");
+			expect(clientOptions.defaultHeaders?.["cf-aig-authorization"]).toBe("Bearer test-token");
+		} finally {
+			rmSync(tempDir, { recursive: true, force: true });
+		}
 	});
 });
