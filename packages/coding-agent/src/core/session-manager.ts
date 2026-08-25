@@ -28,6 +28,15 @@ import {
 } from "./messages.ts";
 
 export const CURRENT_SESSION_VERSION = 3;
+export const TURN_TRACKING_VERSION = 1;
+
+export type TurnKind = "user" | "agent";
+export type InputKind = "normal" | "steer" | "follow-up";
+
+export interface TurnMetadata {
+	turnNumber: number;
+	turnKind: TurnKind;
+}
 
 export interface SessionHeader {
 	type: "session";
@@ -36,6 +45,8 @@ export interface SessionHeader {
 	timestamp: string;
 	cwd: string;
 	parentSession?: string;
+	/** Opts this session into persisted semantic turn metadata. */
+	turnTrackingVersion?: typeof TURN_TRACKING_VERSION;
 }
 
 export interface NewSessionOptions {
@@ -43,7 +54,12 @@ export interface NewSessionOptions {
 	parentSession?: string;
 }
 
-export interface AppendAtOptions {
+export interface AppendMessageOptions {
+	turn?: TurnMetadata;
+	inputKind?: InputKind;
+}
+
+export interface AppendAtOptions extends AppendMessageOptions {
 	preserveLeaf?: boolean;
 }
 
@@ -52,6 +68,8 @@ export interface SessionEntryBase {
 	id: string;
 	parentId: string | null;
 	timestamp: string;
+	turnNumber?: number;
+	turnKind?: TurnKind;
 	/** Overrides the active leaf after replaying this entry. */
 	leafIdAfter?: string | null;
 }
@@ -59,6 +77,7 @@ export interface SessionEntryBase {
 export interface SessionMessageEntry extends SessionEntryBase {
 	type: "message";
 	message: AgentMessage;
+	inputKind?: InputKind;
 }
 
 export interface ThinkingLevelChangeEntry extends SessionEntryBase {
@@ -870,6 +889,7 @@ export class SessionManager {
 	private labelsById: Map<string, string> = new Map();
 	private labelTimestampsById: Map<string, string> = new Map();
 	private leafId: string | null = null;
+	private nextTurnNumber = 1;
 
 	private constructor(
 		cwd: string,
@@ -946,12 +966,14 @@ export class SessionManager {
 			timestamp,
 			cwd: this.cwd,
 			parentSession: options?.parentSession,
+			turnTrackingVersion: TURN_TRACKING_VERSION,
 		};
 		this.fileEntries = [header];
 		this.byId.clear();
 		this.labelsById.clear();
 		this.labelTimestampsById.clear();
 		this.leafId = null;
+		this.nextTurnNumber = 1;
 		this.flushed = false;
 
 		if (this.persist) {
@@ -974,10 +996,18 @@ export class SessionManager {
 		this.labelsById.clear();
 		this.labelTimestampsById.clear();
 		this.leafId = null;
+		let highestTurnNumber = 0;
 		for (const entry of this.fileEntries) {
 			if (entry.type === "session") continue;
 			this.byId.set(entry.id, entry);
 			this.leafId = this._leafIdAfterReplay(entry);
+			if (
+				typeof entry.turnNumber === "number" &&
+				Number.isSafeInteger(entry.turnNumber) &&
+				entry.turnNumber > highestTurnNumber
+			) {
+				highestTurnNumber = entry.turnNumber;
+			}
 			if (entry.type === "label") {
 				if (entry.label) {
 					this.labelsById.set(entry.targetId, entry.label);
@@ -988,6 +1018,7 @@ export class SessionManager {
 				}
 			}
 		}
+		this.nextTurnNumber = highestTurnNumber + 1;
 	}
 
 	private _rewriteFile(): void {
@@ -1024,6 +1055,19 @@ export class SessionManager {
 
 	getSessionFile(): string | undefined {
 		return this.sessionFile;
+	}
+
+	/** Allocate the next persisted semantic turn for tracked sessions. */
+	allocateTurn(turnKind: TurnKind): TurnMetadata | undefined {
+		if (this.getHeader()?.turnTrackingVersion !== TURN_TRACKING_VERSION) {
+			return undefined;
+		}
+		if (!Number.isSafeInteger(this.nextTurnNumber) || this.nextTurnNumber < 1) {
+			throw new Error("Session turn number space exhausted");
+		}
+		const turn = { turnNumber: this.nextTurnNumber, turnKind };
+		this.nextTurnNumber += 1;
+		return turn;
 	}
 
 	_persist(entry: SessionEntry): void {
@@ -1074,8 +1118,8 @@ export class SessionManager {
 	 * so it is easier to find them.
 	 * These need to be appended via appendCompaction() and appendBranchSummary() methods.
 	 */
-	appendMessage(message: Message | CustomMessage | BashExecutionMessage): string {
-		return this.appendMessageAt(this.leafId, message);
+	appendMessage(message: Message | CustomMessage | BashExecutionMessage, options: AppendMessageOptions = {}): string {
+		return this.appendMessageAt(this.leafId, message, options);
 	}
 
 	appendMessageAt(
@@ -1090,6 +1134,8 @@ export class SessionManager {
 			parentId,
 			timestamp: new Date().toISOString(),
 			message,
+			...(options.turn ?? {}),
+			...(options.inputKind ? { inputKind: options.inputKind } : {}),
 		};
 		if (options.preserveLeaf) {
 			entry.leafIdAfter = this.leafId;
@@ -1472,6 +1518,8 @@ export class SessionManager {
 			timestamp,
 			cwd: this.cwd,
 			parentSession: this.persist ? previousSessionFile : undefined,
+			turnTrackingVersion:
+				this.getHeader()?.turnTrackingVersion === TURN_TRACKING_VERSION ? TURN_TRACKING_VERSION : undefined,
 		};
 
 		// Collect labels for entries in the path
@@ -1649,6 +1697,8 @@ export class SessionManager {
 			timestamp,
 			cwd: resolvedTargetCwd,
 			parentSession: resolvedSourcePath,
+			turnTrackingVersion:
+				sourceHeader.turnTrackingVersion === TURN_TRACKING_VERSION ? TURN_TRACKING_VERSION : undefined,
 		};
 		writeFileSync(newSessionFile, `${JSON.stringify(newHeader)}\n`, { flag: "wx" });
 

@@ -104,7 +104,14 @@ import type { ModelRuntime } from "./model-runtime.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
 import { exportSessionToJsonl } from "./session-export.ts";
-import type { BranchSummaryEntry, CompactionEntry, SessionEntry, SessionManager } from "./session-manager.ts";
+import type {
+	BranchSummaryEntry,
+	CompactionEntry,
+	InputKind,
+	SessionEntry,
+	SessionManager,
+	TurnMetadata,
+} from "./session-manager.ts";
 import { getLatestCompactionEntry } from "./session-manager.ts";
 import type { SettingsManager } from "./settings-manager.ts";
 import type { SlashCommandInfo } from "./slash-commands.ts";
@@ -337,6 +344,10 @@ export class AgentSession {
 	private _unsubscribeAgent?: () => void;
 	private _eventListeners: AgentSessionEventListener[] = [];
 	private _inputSources = new WeakMap<AgentMessage, InputSource>();
+	private _inputKinds = new WeakMap<AgentMessage, InputKind>();
+	private _userTurns = new WeakMap<AgentMessage, TurnMetadata>();
+	private _activeAgentTurn: TurnMetadata | undefined;
+	private _agentTurnPending = false;
 	private _isAgentRunActive = false;
 	private _pendingExtensionMessageActions = 0;
 	private _idleWaitPromise: Promise<void> | undefined;
@@ -642,12 +653,44 @@ export class AgentSession {
 	// Track last assistant message for auto-compaction check
 	private _lastAssistantMessage: AssistantMessage | undefined = undefined;
 
+	private _ensureActiveAgentTurn(): TurnMetadata | undefined {
+		if (this._activeAgentTurn) {
+			return this._activeAgentTurn;
+		}
+		if (!this._agentTurnPending) {
+			return undefined;
+		}
+		this._activeAgentTurn = this.sessionManager.allocateTurn("agent");
+		this._agentTurnPending = false;
+		return this._activeAgentTurn;
+	}
+
 	/** Internal handler for agent events - shared by subscribe and reconnect */
 	private _handleAgentEvent = async (event: AgentEvent): Promise<void> => {
+		if (event.type === "agent_start") {
+			this._activeAgentTurn = undefined;
+			this._agentTurnPending = true;
+		}
+
 		// When a user message starts, check if it's from either queue and remove it BEFORE emitting
 		// This ensures the UI sees the updated queue state
 		if (event.type === "message_start" && event.message.role === "user") {
 			this._overflowRecoveryAttempted = false;
+			const inputKind = this._inputKinds.get(event.message);
+			if (inputKind === "steer") {
+				const turn = this._ensureActiveAgentTurn();
+				if (turn) {
+					this._userTurns.set(event.message, turn);
+				}
+			} else if (inputKind === "follow-up") {
+				this._activeAgentTurn = undefined;
+				const turn = this.sessionManager.allocateTurn("user");
+				if (turn) {
+					this._userTurns.set(event.message, turn);
+				}
+				this._agentTurnPending = true;
+			}
+
 			const messageText = contentText(event.message.content, "");
 			if (messageText) {
 				// Check steering queue first
@@ -699,7 +742,14 @@ export class AgentSession {
 				event.message.role === "toolResult"
 			) {
 				// Regular LLM message - persist as SessionMessageEntry
-				this.sessionManager.appendMessage(event.message);
+				const turn =
+					event.message.role === "user" ? this._userTurns.get(event.message) : this._ensureActiveAgentTurn();
+				const inputKind = event.message.role === "user" ? this._inputKinds.get(event.message) : undefined;
+				this.sessionManager.appendMessage(event.message, turn ? { turn, inputKind } : undefined);
+				if (event.message.role === "user") {
+					this._userTurns.delete(event.message);
+					this._inputKinds.delete(event.message);
+				}
 			}
 			// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
 
@@ -723,6 +773,11 @@ export class AgentSession {
 					this._retryAttempt = 0;
 				}
 			}
+		}
+
+		if (event.type === "agent_end") {
+			this._activeAgentTurn = undefined;
+			this._agentTurnPending = false;
 		}
 	};
 
@@ -1128,6 +1183,8 @@ export class AgentSession {
 		} finally {
 			if (userMessage) {
 				this._inputSources.delete(userMessage);
+				this._inputKinds.delete(userMessage);
+				this._userTurns.delete(userMessage);
 			}
 			this._systemPromptOverride = undefined;
 			this._flushPendingBashMessages();
@@ -1339,6 +1396,14 @@ export class AgentSession {
 			return;
 		}
 
+		const userMessage = messages.find((message) => message.role === "user");
+		if (userMessage) {
+			this._inputKinds.set(userMessage, "normal");
+			const turn = this.sessionManager.allocateTurn("user");
+			if (turn) {
+				this._userTurns.set(userMessage, turn);
+			}
+		}
 		preflightResult?.(true);
 		await this._runAgentPrompt(messages, inputSource);
 	}
@@ -1558,6 +1623,7 @@ export class AgentSession {
 			content,
 			timestamp: Date.now(),
 		};
+		this._inputKinds.set(message, delivery === "steer" ? "steer" : "follow-up");
 		if (source) {
 			this._inputSources.set(message, source);
 		}
@@ -1569,6 +1635,7 @@ export class AgentSession {
 			}
 		} catch (error) {
 			this._inputSources.delete(message);
+			this._inputKinds.delete(message);
 			throw error;
 		}
 	}
