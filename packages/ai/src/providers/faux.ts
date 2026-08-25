@@ -689,6 +689,7 @@ export function fauxProvider(options: RegisterFauxProviderOptions = {}): FauxPro
 		auth: { apiKey: { name: "Faux", resolve: async () => ({ auth: {} }) } },
 		models: core.models,
 		api: {
+			api: core.api,
 			stream: core.stream,
 			streamSimple: core.streamSimple,
 			fetchDeferred: core.fetchDeferred,

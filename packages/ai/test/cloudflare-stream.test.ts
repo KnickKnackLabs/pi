@@ -22,6 +22,7 @@ describe("Cloudflare provider streams", () => {
 	it("materializes the model endpoint before dispatch", () => {
 		const captured: string[] = [];
 		const streams = cloudflareStreams({
+			api: "openai-completions",
 			stream: (requestModel) => {
 				captured.push(requestModel.baseUrl);
 				return new AssistantMessageEventStream();
@@ -39,6 +40,7 @@ describe("Cloudflare provider streams", () => {
 		streams.stream(model, context, { env });
 		streams.streamSimple(model, context, { env });
 
+		expect(streams.api).toBe("openai-completions");
 		expect(captured).toEqual([
 			"https://gateway.ai.cloudflare.com/v1/account/gateway/openai",
 			"https://gateway.ai.cloudflare.com/v1/account/gateway/openai",
@@ -48,6 +50,7 @@ describe("Cloudflare provider streams", () => {
 	it("keeps placeholders when the provider env does not resolve them", () => {
 		let captured: string | undefined;
 		const streams = cloudflareStreams({
+			api: "openai-completions",
 			stream: (requestModel) => {
 				captured = requestModel.baseUrl;
 				return new AssistantMessageEventStream();

@@ -1,4 +1,11 @@
-import type { Api, AssistantMessage, AssistantMessageEvent, Model, ProviderStreams } from "../types.ts";
+import type {
+	Api,
+	AssistantMessage,
+	AssistantMessageEvent,
+	IdentifiedProviderStreams,
+	Model,
+	ProviderStreams,
+} from "../types.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 
 function createSetupErrorMessage(model: Model<Api>, error: unknown): AssistantMessage {
@@ -61,7 +68,7 @@ export function lazyStream(
 }
 
 /**
- * Wraps a dynamically imported API implementation module as `ProviderStreams`.
+ * Wraps a dynamically imported API implementation module as identified streams.
  * The module loads on first stream call; the host's import cache deduplicates
  * loads. Load failures terminate the returned stream with an error event.
  */
@@ -70,8 +77,13 @@ export interface LazyApiCapabilities {
 	cancelDeferred?: boolean;
 }
 
-export function lazyApi(load: () => Promise<ProviderStreams>, capabilities?: LazyApiCapabilities): ProviderStreams {
-	const api: ProviderStreams = {
+export function lazyApi<TApi extends Api>(
+	api: TApi,
+	load: () => Promise<ProviderStreams>,
+	capabilities?: LazyApiCapabilities,
+): IdentifiedProviderStreams<TApi> {
+	const streams: IdentifiedProviderStreams<TApi> = {
+		api,
 		stream: (model, context, options) =>
 			lazyStream(model, async () => (await load()).stream(model, context, options)),
 		streamSimple: (model, context, options) =>
@@ -79,7 +91,7 @@ export function lazyApi(load: () => Promise<ProviderStreams>, capabilities?: Laz
 	};
 
 	if (capabilities?.fetchDeferred) {
-		api.fetchDeferred = (model, handle, options) =>
+		streams.fetchDeferred = (model, handle, options) =>
 			lazyStream(model, async () => {
 				const implementation = await load();
 				if (!implementation.fetchDeferred) throw new Error("API does not support deferred responses");
@@ -87,12 +99,12 @@ export function lazyApi(load: () => Promise<ProviderStreams>, capabilities?: Laz
 			});
 	}
 	if (capabilities?.cancelDeferred) {
-		api.cancelDeferred = async (model, handle, options) => {
+		streams.cancelDeferred = async (model, handle, options) => {
 			const implementation = await load();
 			if (!implementation.cancelDeferred) throw new Error("API cannot cancel deferred responses");
 			await implementation.cancelDeferred(model, handle, options);
 		};
 	}
 
-	return api;
+	return streams;
 }

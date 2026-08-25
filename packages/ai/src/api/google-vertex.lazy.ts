@@ -1,4 +1,5 @@
-import type { ProviderStreams } from "../types.ts";
+import type { IdentifiedProviderStreams } from "../types.ts";
 import { lazyApi } from "./lazy.ts";
 
-export const googleVertexApi = (): ProviderStreams => lazyApi(() => import("./google-vertex.ts"));
+export const googleVertexApi = (): IdentifiedProviderStreams<"google-vertex"> =>
+	lazyApi("google-vertex", () => import("./google-vertex.ts"));

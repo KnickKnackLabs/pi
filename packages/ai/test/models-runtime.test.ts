@@ -305,6 +305,7 @@ describe("Models runtime", () => {
 				throw new Error("must not fetch");
 			},
 			api: {
+				api: "test-api",
 				stream: () => new AssistantMessageEventStream(),
 				streamSimple: () => new AssistantMessageEventStream(),
 			},
@@ -373,6 +374,7 @@ describe("Models runtime", () => {
 				models: [],
 				fetchModels: fetchModels ? () => fetchModels() : undefined,
 				api: {
+					api: "test-api",
 					stream: () => new AssistantMessageEventStream(),
 					streamSimple: () => new AssistantMessageEventStream(),
 				},

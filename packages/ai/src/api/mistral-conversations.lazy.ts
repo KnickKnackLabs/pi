@@ -1,4 +1,5 @@
-import type { ProviderStreams } from "../types.ts";
+import type { IdentifiedProviderStreams } from "../types.ts";
 import { lazyApi } from "./lazy.ts";
 
-export const mistralConversationsApi = (): ProviderStreams => lazyApi(() => import("./mistral-conversations.ts"));
+export const mistralConversationsApi = (): IdentifiedProviderStreams<"mistral-conversations"> =>
+	lazyApi("mistral-conversations", () => import("./mistral-conversations.ts"));

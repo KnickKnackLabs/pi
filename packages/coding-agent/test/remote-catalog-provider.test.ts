@@ -35,6 +35,7 @@ function testProvider(localGeneratedAt?: number) {
 			auth: { apiKey: { name: "Test", resolve: async () => ({ auth: {} }) } },
 			models: [model("static")],
 			api: {
+				api: "openai-completions",
 				stream: () => {
 					throw new Error("not used");
 				},

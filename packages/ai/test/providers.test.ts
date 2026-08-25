@@ -17,6 +17,7 @@ import type {
 	DeferredCancelOptions,
 	DeferredFetchOptions,
 	DeferredHandle,
+	IdentifiedProviderStreams,
 	Model,
 	ProviderStreams,
 } from "../src/types.ts";
@@ -326,7 +327,15 @@ describe("createProvider", () => {
 		return { stream: respond, streamSimple: respond };
 	}
 
-	function testModel(api: string, id: string): Model<Api> {
+	function identifiedStreams<TApi extends Api>(
+		api: TApi,
+		label: string,
+		calls: string[],
+	): IdentifiedProviderStreams<TApi> {
+		return { api, ...recordingStreams(label, calls) };
+	}
+
+	function testModel<TApi extends Api>(api: TApi, id: string): Model<TApi> {
 		return {
 			id,
 			name: id,
@@ -346,6 +355,7 @@ describe("createProvider", () => {
 		const streams = recordingStreams("deferred", []);
 		streams.fetchDeferred = (model) => streams.streamSimple(model, context);
 		const api = lazyApi(
+			"api-a",
 			async () => {
 				loads++;
 				return streams;
@@ -368,7 +378,7 @@ describe("createProvider", () => {
 
 	it("dispatches on model.api for mixed-API providers", async () => {
 		const calls: string[] = [];
-		const provider = createProvider({
+		const provider = createProvider<"api-a" | "api-b">({
 			id: "mixed",
 			auth: { apiKey: { name: "Test", resolve: async () => ({ auth: {} }) } },
 			models: [testModel("api-a", "model-a")],
@@ -386,16 +396,23 @@ describe("createProvider", () => {
 		expect(calls).toEqual(["a:model-a", "b:model-b"]);
 	});
 
-	it("reports known model APIs as supported for a single implementation", () => {
-		const provider = createProvider({
+	it("routes custom models through an identified single implementation with an empty catalog", async () => {
+		const calls: string[] = [];
+		const provider = createProvider<Api>({
 			id: "single",
 			auth: { apiKey: { name: "Test", resolve: async () => ({ auth: {} }) } },
-			models: [testModel("api-a", "model-a")],
-			api: recordingStreams("single", []),
+			models: [],
+			api: identifiedStreams("api-a", "single", calls),
 		});
 
+		expect(provider.getModels()).toEqual([]);
 		expect(provider.supportsApi("api-a")).toBe(true);
 		expect(provider.supportsApi("api-ghost")).toBe(false);
+		await provider.streamSimple(testModel("api-a", "custom-model"), context).result();
+		const unsupported = await provider.streamSimple(testModel("api-ghost", "wrong-api"), context).result();
+		expect(unsupported.stopReason).toBe("error");
+		expect(unsupported.errorMessage).toContain("no API implementation");
+		expect(calls).toEqual(["single:custom-model"]);
 	});
 
 	it("merges provider-resolved env into stream options", async () => {
@@ -415,6 +432,7 @@ describe("createProvider", () => {
 			},
 			models: [envModel],
 			api: {
+				api: "api-a",
 				stream: (model, _context, options) => {
 					capturedEnv = options?.env;
 					capturedApiKey = options?.apiKey;
@@ -444,7 +462,7 @@ describe("createProvider", () => {
 		let fetchedOptions: DeferredFetchOptions | undefined;
 		let cancelledOptions: DeferredCancelOptions | undefined;
 		const deferredModel = { ...testModel("api-a", "model-a"), provider: "deferred-provider" };
-		const streams = recordingStreams("deferred", []);
+		const streams = identifiedStreams("api-a", "deferred", []);
 		streams.fetchDeferred = (model, _handle, options) => {
 			fetchedModel = model;
 			fetchedOptions = options;
@@ -515,7 +533,7 @@ describe("createProvider", () => {
 	});
 
 	it("produces a stream error for a model whose api has no implementation", async () => {
-		const provider = createProvider({
+		const provider = createProvider<"api-a" | "api-ghost">({
 			id: "mixed",
 			auth: { apiKey: { name: "Test", resolve: async () => ({ auth: {} }) } },
 			models: [testModel("api-a", "model-a")],
@@ -549,7 +567,7 @@ describe("createProvider", () => {
 				}
 				return [testModel("api-a", `listed-${current}`)];
 			},
-			api: recordingStreams("a", []),
+			api: identifiedStreams("api-a", "a", []),
 		});
 
 		const store = new InMemoryModelsStore();

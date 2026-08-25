@@ -23,6 +23,7 @@ import type {
 	DeferredCancelOptions,
 	DeferredFetchOptions,
 	DeferredHandle,
+	IdentifiedProviderStreams,
 	Model,
 	ModelCostRates,
 	ModelThinkingLevel,
@@ -756,15 +757,15 @@ export interface CreateProviderOptions<TApi extends Api = Api> {
 	/** Fetch a dynamic model overlay. createProvider restores and publishes it transactionally. */
 	fetchModels?: (context: RefreshModelsContext) => Promise<readonly Model<TApi>[]>;
 	filterModels?: (models: readonly Model<TApi>[], credential: Credential | undefined) => readonly Model<TApi>[];
-	/** Single implementation, or map keyed by `model.api` for mixed-API providers. */
-	api: ProviderStreams | Partial<Record<TApi, ProviderStreams>>;
+	/** Identified single implementation, or map keyed by `model.api` for mixed-API providers. */
+	api: IdentifiedProviderStreams<TApi> | Partial<Record<TApi, ProviderStreams>>;
 }
 
 /**
  * Builds a provider from parts. Built-in provider factories and models.json
- * custom providers both go through this. A single `api` streams all models;
- * an `api` map dispatches on `model.api`, and a model whose api has no entry
- * produces a stream error.
+ * custom providers both go through this. An identified single `api` dispatches
+ * matching models; an `api` map dispatches on `model.api`. A model whose api
+ * does not match or has no map entry produces a stream error.
  */
 export function createProvider<TApi extends Api = Api>(input: CreateProviderOptions<TApi>): CreatedProvider<TApi> {
 	const baselineModels = input.models;
@@ -780,10 +781,13 @@ export function createProvider<TApi extends Api = Api>(input: CreateProviderOpti
 		return merged;
 	};
 	const single =
-		typeof (input.api as ProviderStreams).stream === "function" ? (input.api as ProviderStreams) : undefined;
+		typeof (input.api as ProviderStreams).stream === "function"
+			? (input.api as IdentifiedProviderStreams<TApi>)
+			: undefined;
 	const byApi = single ? undefined : (input.api as Partial<Record<string, ProviderStreams>>);
 
-	const apiFor = (model: Model<Api>): ProviderStreams | undefined => single ?? byApi?.[model.api];
+	const apiFor = (model: Model<Api>): ProviderStreams | undefined =>
+		single !== undefined ? (single.api === model.api ? single : undefined) : byApi?.[model.api];
 
 	const dispatch = (
 		model: Model<Api>,
@@ -834,9 +838,7 @@ export function createProvider<TApi extends Api = Api>(input: CreateProviderOpti
 			: undefined,
 		filterModels: input.filterModels,
 		supportsApi: (api) =>
-			single !== undefined
-				? currentModels().some((model) => model.api === api)
-				: byApi !== undefined && Object.hasOwn(byApi, api),
+			single !== undefined ? single.api === api : byApi !== undefined && Object.hasOwn(byApi, api),
 		stream: (model, context, options) => dispatch(model, (streams) => streams.stream(model, context, options)),
 		streamSimple: (model, context, options) =>
 			dispatch(model, (streams) => streams.streamSimple(model, context, options)),

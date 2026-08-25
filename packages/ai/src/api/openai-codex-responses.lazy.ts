@@ -1,4 +1,5 @@
-import type { ProviderStreams } from "../types.ts";
+import type { IdentifiedProviderStreams } from "../types.ts";
 import { lazyApi } from "./lazy.ts";
 
-export const openAICodexResponsesApi = (): ProviderStreams => lazyApi(() => import("./openai-codex-responses.ts"));
+export const openAICodexResponsesApi = (): IdentifiedProviderStreams<"openai-codex-responses"> =>
+	lazyApi("openai-codex-responses", () => import("./openai-codex-responses.ts"));
