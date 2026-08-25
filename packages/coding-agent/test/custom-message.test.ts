@@ -21,9 +21,11 @@ describe("CustomMessageComponent", () => {
 			display: true,
 			timestamp: Date.now(),
 		};
-		const component = new CustomMessageComponent(message, renderer, undefined, 1);
+		const component = new CustomMessageComponent(message, renderer, undefined, 1, {
+			entryId: "custom-entry",
+		});
 
-		expect(optionsSeen).toEqual([{ expanded: false, outputPad: 1 }]);
+		expect(optionsSeen).toEqual([{ entryId: "custom-entry", expanded: false, outputPad: 1 }]);
 		expect(
 			component
 				.render(40)
@@ -33,7 +35,9 @@ describe("CustomMessageComponent", () => {
 
 		component.setOutputPad(0);
 
-		expect(optionsSeen.at(-1)).toEqual({ expanded: false, outputPad: 0 });
+		expect(optionsSeen.at(-1)).toEqual({ entryId: "custom-entry", expanded: false, outputPad: 0 });
+		component.setRenderContext({ entryId: "updated-custom-entry" });
+		expect(optionsSeen.at(-1)).toEqual({ entryId: "updated-custom-entry", expanded: false, outputPad: 0 });
 		expect(
 			component
 				.render(40)

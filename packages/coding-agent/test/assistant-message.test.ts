@@ -231,8 +231,15 @@ describe("AssistantMessageComponent", () => {
 	test("passes streaming and expanded state through assistant renderer transforms", () => {
 		initTheme("dark");
 		const message = createAssistantMessage([{ type: "text", text: "partial" }]);
-		const calls: Array<{ message: AssistantMessage; expanded: boolean; outputPad: number; isStreaming: boolean }> =
-			[];
+		const calls: Array<{
+			message: AssistantMessage;
+			entryId?: string;
+			segmentNumber?: number;
+			segmentKind?: "user" | "agent";
+			expanded: boolean;
+			outputPad: number;
+			isStreaming: boolean;
+		}> = [];
 		let compositions = 0;
 		const component = new AssistantMessageComponent(
 			undefined,
@@ -254,17 +261,44 @@ describe("AssistantMessageComponent", () => {
 					};
 				},
 			],
+			{ entryId: "assistant-entry", segmentNumber: 2, segmentKind: "agent" },
 		);
 
 		component.setExpanded(true);
 		component.updateContent(message, true);
 		expect(stripAnsi(component.render(80).join("\n"))).toContain("metadata");
+		component.setRenderContext({ entryId: "updated-assistant-entry", segmentNumber: 4, segmentKind: "agent" });
 		component.updateContent(message, false);
 
 		expect(compositions).toBe(1);
 		expect(calls).toEqual([
-			{ message, expanded: true, outputPad: 2, isStreaming: true },
-			{ message, expanded: true, outputPad: 2, isStreaming: false },
+			{
+				message,
+				entryId: "assistant-entry",
+				segmentNumber: 2,
+				segmentKind: "agent",
+				expanded: true,
+				outputPad: 2,
+				isStreaming: true,
+			},
+			{
+				message,
+				entryId: "updated-assistant-entry",
+				segmentNumber: 4,
+				segmentKind: "agent",
+				expanded: true,
+				outputPad: 2,
+				isStreaming: true,
+			},
+			{
+				message,
+				entryId: "updated-assistant-entry",
+				segmentNumber: 4,
+				segmentKind: "agent",
+				expanded: true,
+				outputPad: 2,
+				isStreaming: false,
+			},
 		]);
 	});
 

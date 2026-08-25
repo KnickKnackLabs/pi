@@ -97,9 +97,17 @@ describe("InteractiveMode compaction events", () => {
 
 		expect(fakeThis.renderSessionItems).toHaveBeenCalledWith(
 			[
-				expect.objectContaining({ role: "compactionSummary", summary: "current summary" }),
+				{
+					type: "session_message",
+					message: expect.objectContaining({ role: "compactionSummary", summary: "current summary" }),
+					renderContext: {},
+				},
 				{ type: "compaction_cost", kind: "compaction", usage: currentUsage },
-				expect.objectContaining({ role: "compactionSummary", summary: "previous summary" }),
+				{
+					type: "session_message",
+					message: expect.objectContaining({ role: "compactionSummary", summary: "previous summary" }),
+					renderContext: {},
+				},
 				{ type: "compaction_cost", kind: "compaction", usage: previousUsage },
 			],
 			{ isReplay: true },

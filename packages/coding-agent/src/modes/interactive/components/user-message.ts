@@ -4,6 +4,7 @@ import type {
 	BuiltInMessageRenderer,
 	BuiltInMessageRendererTransform,
 	MarkdownTransformer,
+	SessionMessageRenderContext,
 } from "../../../core/extensions/types.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { composeBuiltInMessageRenderer } from "./built-in-message-renderer.ts";
@@ -23,6 +24,7 @@ export class UserMessageComponent extends Container {
 	private markdownTransformers: readonly MarkdownTransformer[];
 	private renderer: BuiltInMessageRenderer<"user">;
 	private message?: BuiltInMessageByRole["user"];
+	private renderContext: SessionMessageRenderContext;
 	private expanded = false;
 
 	constructor(
@@ -32,6 +34,7 @@ export class UserMessageComponent extends Container {
 		markdownTransformers: readonly MarkdownTransformer[] = [],
 		rendererTransforms: readonly BuiltInMessageRendererTransform<"user">[] = [],
 		message?: BuiltInMessageByRole["user"],
+		renderContext: SessionMessageRenderContext = {},
 	) {
 		super();
 		this.text = text;
@@ -43,6 +46,12 @@ export class UserMessageComponent extends Container {
 			rendererTransforms,
 		);
 		this.message = message;
+		this.renderContext = renderContext;
+		this.rebuild();
+	}
+
+	setRenderContext(renderContext: SessionMessageRenderContext): void {
+		this.renderContext = renderContext;
 		this.rebuild();
 	}
 
@@ -79,7 +88,12 @@ export class UserMessageComponent extends Container {
 		const rendered = this.message
 			? this.renderer(
 					this.message,
-					{ expanded: this.expanded, outputPad: this.outputPad, isStreaming: false },
+					{
+						...this.renderContext,
+						expanded: this.expanded,
+						outputPad: this.outputPad,
+						isStreaming: false,
+					},
 					theme,
 				)
 			: { component: this.createFallback(), renderShell: "default" as const };

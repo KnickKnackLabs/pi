@@ -1,5 +1,5 @@
 import { Box, type Component, Container, getCapabilities, Image, Spacer, Text, type TUI } from "@earendil-works/pi-tui";
-import type { ToolDefinition, ToolRenderContext } from "../../../core/extensions/types.ts";
+import type { SessionMessageRenderContext, ToolDefinition, ToolRenderContext } from "../../../core/extensions/types.ts";
 import { createAllToolDefinitions, type ToolName } from "../../../core/tools/index.ts";
 import { getTextOutput as getRenderedTextOutput } from "../../../core/tools/render-utils.ts";
 import { convertToPng } from "../../../utils/image-convert.ts";
@@ -25,6 +25,8 @@ export class ToolExecutionComponent extends Container {
 	private toolName: string;
 	private toolCallId: string;
 	private args: any;
+	private callMessage: SessionMessageRenderContext;
+	private resultMessage?: SessionMessageRenderContext;
 	private expanded = false;
 	private showImages: boolean;
 	private imageWidthCells: number;
@@ -51,11 +53,13 @@ export class ToolExecutionComponent extends Container {
 		toolDefinition: ToolDefinition<any, any> | undefined,
 		ui: TUI,
 		cwd: string,
+		callMessage: SessionMessageRenderContext = {},
 	) {
 		super();
 		this.toolName = toolName;
 		this.toolCallId = toolCallId;
 		this.args = args;
+		this.callMessage = callMessage;
 		this.toolDefinition = toolDefinition;
 		this.builtInToolDefinition = createAllToolDefinitions(cwd)[toolName as ToolName];
 		this.showImages = options.showImages ?? true;
@@ -117,6 +121,8 @@ export class ToolExecutionComponent extends Container {
 
 	private getRenderContext(lastComponent: Component | undefined): ToolRenderContext {
 		return {
+			callMessage: this.callMessage,
+			resultMessage: this.resultMessage,
 			args: this.args,
 			toolCallId: this.toolCallId,
 			invalidate: () => {
@@ -153,6 +159,16 @@ export class ToolExecutionComponent extends Container {
 			text += `${theme.fg("muted", `\n... (${remaining} more lines,`)} ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
 		}
 		return new Text(text, 0, 0);
+	}
+
+	setCallMessageRenderContext(callMessage: SessionMessageRenderContext): void {
+		this.callMessage = callMessage;
+		this.updateDisplay();
+	}
+
+	setResultMessageRenderContext(resultMessage: SessionMessageRenderContext): void {
+		this.resultMessage = resultMessage;
+		this.updateDisplay();
 	}
 
 	updateArgs(args: any): void {

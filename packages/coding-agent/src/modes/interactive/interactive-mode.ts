@@ -78,6 +78,7 @@ import type {
 	InputSource,
 	MarkdownTransformer,
 	ProjectTrustContext,
+	SessionMessageRenderContext,
 	WorkingIndicatorOptions,
 } from "../../core/extensions/index.ts";
 import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/footer-data-provider.ts";
@@ -94,6 +95,7 @@ import { DefaultPackageManager, type StartupPackageUpdateResult } from "../../co
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
 import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from "../../core/session-manager.ts";
+import { sessionMessageEntryToRenderContext } from "../../core/session-message-render-context.ts";
 import type { FullscreenExitOutput, TuiMode } from "../../core/settings-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
@@ -215,7 +217,13 @@ type CompactionCostNotice = {
 	usage: Usage;
 };
 
-type RenderSessionItem = AgentMessage | Extract<SessionEntry, { type: "custom" }> | CompactionCostNotice;
+type RenderSessionMessageItem = {
+	type: "session_message";
+	message: AgentMessage;
+	renderContext: SessionMessageRenderContext;
+};
+
+type RenderSessionItem = RenderSessionMessageItem | Extract<SessionEntry, { type: "custom" }> | CompactionCostNotice;
 
 function isCustomSessionEntry(item: RenderSessionItem): item is Extract<SessionEntry, { type: "custom" }> {
 	return "type" in item && item.type === "custom";
@@ -472,6 +480,10 @@ export class InteractiveMode {
 	// Streaming message tracking
 	private streamingComponent: AssistantMessageComponent | undefined = undefined;
 	private streamingMessage: AssistantMessage | undefined = undefined;
+
+	// Live renderer context is attached after the corresponding message entry is persisted.
+	private liveMessageComponents = new WeakMap<AgentMessage, UserMessageComponent | CustomMessageComponent>();
+	private toolCallMessageRenderContexts = new Map<string, SessionMessageRenderContext>();
 
 	// Tool execution tracking: toolCallId -> component
 	private pendingTools = new Map<string, ToolExecutionComponent>();
@@ -2052,6 +2064,8 @@ export class InteractiveMode {
 		this.compactionQueuedMessages = [];
 		this.streamingComponent = undefined;
 		this.streamingMessage = undefined;
+		this.liveMessageComponents = new WeakMap();
+		this.toolCallMessageRenderContexts.clear();
 		this.pendingTools.clear();
 		this.renderInitialMessages();
 	}
@@ -3165,6 +3179,35 @@ export class InteractiveMode {
 		});
 	}
 
+	private applyPersistedMessageRenderContext(message: AgentMessage): void {
+		const renderContext = this.session.getMessageRenderContext(message);
+		if (!renderContext) return;
+
+		if (message.role === "user" || message.role === "custom") {
+			const component = this.liveMessageComponents.get(message);
+			component?.setRenderContext(renderContext);
+			this.liveMessageComponents.delete(message);
+			return;
+		}
+
+		if (message.role === "assistant") {
+			this.streamingComponent?.setRenderContext(renderContext);
+			for (const content of message.content) {
+				if (content.type !== "toolCall") continue;
+				this.toolCallMessageRenderContexts.set(content.id, renderContext);
+				this.pendingTools.get(content.id)?.setCallMessageRenderContext(renderContext);
+			}
+			return;
+		}
+
+		if (message.role === "toolResult") {
+			const component = this.pendingTools.get(message.toolCallId);
+			component?.setResultMessageRenderContext(renderContext);
+			this.pendingTools.delete(message.toolCallId);
+			this.toolCallMessageRenderContexts.delete(message.toolCallId);
+		}
+	}
+
 	private async handleEvent(event: AgentSessionEvent): Promise<void> {
 		if (!this.isInitialized) {
 			await this.init();
@@ -3175,6 +3218,8 @@ export class InteractiveMode {
 		switch (event.type) {
 			case "agent_start":
 				this.pendingTools.clear();
+				this.toolCallMessageRenderContexts.clear();
+				this.liveMessageComponents = new WeakMap();
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(true);
 				}
@@ -3223,10 +3268,17 @@ export class InteractiveMode {
 
 			case "message_start":
 				if (event.message.role === "custom") {
-					this.addMessageToChat(event.message);
+					this.addMessageToChat(event.message, {
+						isReplay: false,
+						renderContext: this.session.getMessageRenderContext(event.message),
+					});
 					this.ui.requestRender();
 				} else if (event.message.role === "user") {
-					this.addMessageToChat(event.message, { source: event.source, isReplay: false });
+					this.addMessageToChat(event.message, {
+						source: event.source,
+						isReplay: false,
+						renderContext: this.session.getMessageRenderContext(event.message),
+					});
 					this.updatePendingMessagesDisplay();
 					this.ui.requestRender();
 				} else if (event.message.role === "assistant") {
@@ -3238,6 +3290,7 @@ export class InteractiveMode {
 						this.outputPad,
 						this.getMarkdownTransformers(),
 						this.session.extensionRunner.getBuiltInMessageRendererTransforms("assistant"),
+						this.session.getMessageRenderContext(event.message),
 					);
 					this.streamingComponent.setExpanded(this.toolOutputExpanded);
 					this.streamingMessage = event.message;
@@ -3266,6 +3319,7 @@ export class InteractiveMode {
 									this.getRegisteredToolDefinition(content.name),
 									this.ui,
 									this.sessionManager.getCwd(),
+									this.toolCallMessageRenderContexts.get(content.id),
 								);
 								component.setExpanded(this.toolOutputExpanded);
 								this.chatContainer.addChild(component);
@@ -3283,7 +3337,11 @@ export class InteractiveMode {
 				break;
 
 			case "message_end":
-				if (event.message.role === "user") break;
+				this.applyPersistedMessageRenderContext(event.message);
+				if (event.message.role === "user") {
+					this.ui.requestRender();
+					break;
+				}
 				if (this.streamingComponent && event.message.role === "assistant") {
 					this.streamingMessage = event.message;
 					let errorMessage: string | undefined;
@@ -3340,6 +3398,7 @@ export class InteractiveMode {
 						this.getRegisteredToolDefinition(event.toolName),
 						this.ui,
 						this.sessionManager.getCwd(),
+						this.toolCallMessageRenderContexts.get(event.toolCallId),
 					);
 					component.setExpanded(this.toolOutputExpanded);
 					this.chatContainer.addChild(component);
@@ -3363,7 +3422,6 @@ export class InteractiveMode {
 				const component = this.pendingTools.get(event.toolCallId);
 				if (component) {
 					component.updateResult({ ...event.result, isError: event.isError });
-					this.pendingTools.delete(event.toolCallId);
 					this.ui.requestRender();
 				}
 				break;
@@ -3380,6 +3438,8 @@ export class InteractiveMode {
 					this.streamingMessage = undefined;
 				}
 				this.pendingTools.clear();
+				this.toolCallMessageRenderContexts.clear();
+				this.liveMessageComponents = new WeakMap();
 
 				this.ui.requestRender();
 				break;
@@ -3601,7 +3661,12 @@ export class InteractiveMode {
 
 	private addMessageToChat(
 		message: AgentMessage,
-		options?: { populateHistory?: boolean; source?: InputSource; isReplay?: boolean },
+		options?: {
+			populateHistory?: boolean;
+			source?: InputSource;
+			isReplay?: boolean;
+			renderContext?: SessionMessageRenderContext;
+		},
 	): void {
 		switch (message.role) {
 			case "bashExecution": {
@@ -3626,9 +3691,13 @@ export class InteractiveMode {
 						renderer,
 						this.getMarkdownThemeWithSettings(),
 						this.outputPad,
+						options?.renderContext,
 					);
 					component.setExpanded(this.toolOutputExpanded);
 					this.chatContainer.addChild(component);
+					if (options?.isReplay !== true) {
+						this.liveMessageComponents.set(message, component);
+					}
 				}
 				break;
 			}
@@ -3677,9 +3746,13 @@ export class InteractiveMode {
 								this.getMarkdownTransformers(),
 								this.session.extensionRunner.getBuiltInMessageRendererTransforms("user"),
 								message,
+								options?.renderContext,
 							);
 							userComponent.setExpanded(this.toolOutputExpanded);
 							this.chatContainer.addChild(userComponent);
+							if (options?.isReplay !== true) {
+								this.liveMessageComponents.set(message, userComponent);
+							}
 						}
 					} else {
 						const userComponent = new UserMessageComponent(
@@ -3689,9 +3762,13 @@ export class InteractiveMode {
 							this.getMarkdownTransformers(),
 							this.session.extensionRunner.getBuiltInMessageRendererTransforms("user"),
 							message,
+							options?.renderContext,
 						);
 						userComponent.setExpanded(this.toolOutputExpanded);
 						this.chatContainer.addChild(userComponent);
+						if (options?.isReplay !== true) {
+							this.liveMessageComponents.set(message, userComponent);
+						}
 					}
 					if (options?.populateHistory) {
 						this.editor.addToHistory?.(textContent);
@@ -3708,6 +3785,7 @@ export class InteractiveMode {
 					this.outputPad,
 					this.getMarkdownTransformers(),
 					this.session.extensionRunner.getBuiltInMessageRendererTransforms("assistant"),
+					options?.renderContext,
 				);
 				assistantComponent.setExpanded(this.toolOutputExpanded);
 				this.chatContainer.addChild(assistantComponent);
@@ -3728,6 +3806,8 @@ export class InteractiveMode {
 		options: { updateFooter?: boolean; populateHistory?: boolean; isReplay?: boolean } = {},
 	): void {
 		this.pendingTools.clear();
+		this.toolCallMessageRenderContexts.clear();
+		this.liveMessageComponents = new WeakMap();
 		const renderedPendingTools = new Map<string, ToolExecutionComponent>();
 		// Cache-miss notices are not persisted; re-derive them from the full entry
 		// list and re-inject them after the assistant messages that paid for them.
@@ -3750,10 +3830,10 @@ export class InteractiveMode {
 				continue;
 			}
 
-			const message = item;
+			const { message, renderContext } = item;
 			// Assistant messages need special handling for tool calls
 			if (message.role === "assistant") {
-				this.addMessageToChat(message);
+				this.addMessageToChat(message, { isReplay: options.isReplay, renderContext });
 				// Render tool call components
 				for (const content of message.content) {
 					if (content.type === "toolCall") {
@@ -3768,6 +3848,7 @@ export class InteractiveMode {
 							this.getRegisteredToolDefinition(content.name),
 							this.ui,
 							this.sessionManager.getCwd(),
+							renderContext,
 						);
 						component.setExpanded(this.toolOutputExpanded);
 						this.chatContainer.addChild(component);
@@ -3797,12 +3878,17 @@ export class InteractiveMode {
 				// Match tool results to pending tool components
 				const component = renderedPendingTools.get(message.toolCallId);
 				if (component) {
+					component.setResultMessageRenderContext(renderContext);
 					component.updateResult(message);
 					renderedPendingTools.delete(message.toolCallId);
 				}
 			} else {
 				// All other messages use standard rendering
-				this.addMessageToChat(message, options);
+				this.addMessageToChat(message, {
+					populateHistory: options.populateHistory,
+					isReplay: options.isReplay,
+					renderContext,
+				});
 			}
 		}
 
@@ -3826,7 +3912,13 @@ export class InteractiveMode {
 			if (entry.type === "custom") {
 				return [entry];
 			}
-			const messages = sessionEntryToContextMessages(entry);
+			const renderContext =
+				entry.type === "message" || entry.type === "custom_message"
+					? sessionMessageEntryToRenderContext(entry)
+					: {};
+			const messages = sessionEntryToContextMessages(entry).map(
+				(message): RenderSessionMessageItem => ({ type: "session_message", message, renderContext }),
+			);
 			if ((entry.type === "compaction" || entry.type === "branch_summary") && entry.usage && messages.length > 0) {
 				return [...messages, { type: "compaction_cost", kind: entry.type, usage: entry.usage }];
 			}
@@ -3860,8 +3952,10 @@ export class InteractiveMode {
 	private maybeShowCacheMissNotice(message: AssistantMessage): void {
 		if (!this.settingsManager.getShowCacheMissNotices()) return;
 
-		// Entries don't contain `message` yet: message_end fires before persistence.
-		const miss = detectCacheMiss(this.sessionManager.getEntries(), message, this.session.modelRuntime);
+		const entryId = this.session.getMessageRenderContext(message)?.entryId;
+		const entries = this.sessionManager.getEntries();
+		const previousEntries = entryId ? entries.filter((entry) => entry.id !== entryId) : entries;
+		const miss = detectCacheMiss(previousEntries, message, this.session.modelRuntime);
 		if (miss) this.addCacheMissNotice(miss);
 	}
 

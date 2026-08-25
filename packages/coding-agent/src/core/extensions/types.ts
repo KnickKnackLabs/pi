@@ -60,7 +60,9 @@ import type {
 	BranchSummaryEntry,
 	CompactionEntry,
 	CustomEntry,
+	InputKind,
 	ReadonlySessionManager,
+	SegmentKind,
 	SessionEntry,
 	SessionManager,
 } from "../session-manager.ts";
@@ -431,6 +433,10 @@ export interface ToolRenderResultOptions {
 
 /** Context passed to tool renderers. */
 export interface ToolRenderContext<TState = any, TArgs = any> {
+	/** Persisted assistant message that owns this tool call. */
+	callMessage: SessionMessageRenderContext;
+	/** Persisted tool-result message, once one exists. */
+	resultMessage?: SessionMessageRenderContext;
 	/** Current tool call arguments. Shared across call/result renders for the same tool call. */
 	args: TArgs;
 	/** Unique id for this tool execution. Stable across call/result renders for the same tool call. */
@@ -1239,7 +1245,18 @@ export interface SessionBeforeTreeResult {
 // Message and Entry Rendering
 // ============================================================================
 
-export interface MessageRenderOptions {
+export interface SessionMessageRenderContext {
+	/** Canonical persisted session-entry id for the rendered message. */
+	readonly entryId?: string;
+	/** Persisted conversation segment number, when the session tracks segments. */
+	readonly segmentNumber?: number;
+	/** Persisted conversation segment kind, when the session tracks segments. */
+	readonly segmentKind?: SegmentKind;
+	/** Persisted user-input kind, when the rendered message records one. */
+	readonly inputKind?: InputKind;
+}
+
+export interface MessageRenderOptions extends SessionMessageRenderContext {
 	expanded: boolean;
 	/** Horizontal padding configured by the outputPad setting. */
 	outputPad: number;

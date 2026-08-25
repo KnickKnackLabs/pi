@@ -80,6 +80,7 @@ export function createToolHtmlRenderer(deps: ToolHtmlRendererDeps): ToolHtmlRend
 		isError: boolean,
 	): ToolRenderContext => {
 		return {
+			callMessage: {},
 			args: renderedArgs.get(toolCallId),
 			toolCallId,
 			invalidate: () => {},

@@ -58,14 +58,23 @@ describe("UserMessageComponent", () => {
 		expect(stripAnsi(component.render(80).join("\n"))).toContain("Message after");
 	});
 
-	test("passes the complete message and current render options to renderer transforms", () => {
+	test("passes the complete message and current session context to renderer transforms", () => {
 		initTheme("dark");
 		const message: UserMessage = {
 			role: "user",
 			content: "hello",
 			timestamp: 123,
 		};
-		const calls: Array<{ message: UserMessage; expanded: boolean; outputPad: number; isStreaming: boolean }> = [];
+		const calls: Array<{
+			message: UserMessage;
+			entryId?: string;
+			segmentNumber?: number;
+			segmentKind?: "user" | "agent";
+			inputKind?: "normal" | "steer" | "follow-up";
+			expanded: boolean;
+			outputPad: number;
+			isStreaming: boolean;
+		}> = [];
 		let compositions = 0;
 		const component = new UserMessageComponent(
 			"hello",
@@ -86,17 +95,52 @@ describe("UserMessageComponent", () => {
 				},
 			],
 			message,
+			{ entryId: "user-entry", segmentNumber: 1, segmentKind: "user", inputKind: "normal" },
 		);
 
 		component.setExpanded(true);
+		component.setRenderContext({
+			entryId: "updated-user-entry",
+			segmentNumber: 3,
+			segmentKind: "agent",
+			inputKind: "steer",
+		});
 		const rendered = stripAnsi(component.render(80).join("\n"));
 
 		expect(rendered).toContain("metadata");
 		expect(rendered).toContain("hello");
 		expect(compositions).toBe(1);
 		expect(calls).toEqual([
-			{ message, expanded: false, outputPad: 2, isStreaming: false },
-			{ message, expanded: true, outputPad: 2, isStreaming: false },
+			{
+				message,
+				entryId: "user-entry",
+				segmentNumber: 1,
+				segmentKind: "user",
+				inputKind: "normal",
+				expanded: false,
+				outputPad: 2,
+				isStreaming: false,
+			},
+			{
+				message,
+				entryId: "user-entry",
+				segmentNumber: 1,
+				segmentKind: "user",
+				inputKind: "normal",
+				expanded: true,
+				outputPad: 2,
+				isStreaming: false,
+			},
+			{
+				message,
+				entryId: "updated-user-entry",
+				segmentNumber: 3,
+				segmentKind: "agent",
+				inputKind: "steer",
+				expanded: true,
+				outputPad: 2,
+				isStreaming: false,
+			},
 		]);
 	});
 });
