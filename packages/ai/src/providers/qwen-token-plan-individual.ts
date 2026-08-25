@@ -10,6 +10,7 @@ export function qwenTokenPlanIndividualProvider(): Provider<"openai-completions"
 		baseUrl: "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
 		auth: { apiKey: envApiKeyAuth("Qwen Token Plan Individual API key", ["QWEN_TOKEN_PLAN_API_KEY"]) },
 		models: Object.values(QWEN_TOKEN_PLAN_INDIVIDUAL_MODELS),
+		apiId: "openai-completions",
 		api: openAICompletionsApi(),
 	});
 }

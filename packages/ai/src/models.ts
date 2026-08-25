@@ -133,6 +133,9 @@ export interface Provider<TApi extends Api = Api> {
 	 */
 	filterModels?(models: readonly Model<TApi>[], credential: Credential | undefined): readonly Model<TApi>[];
 
+	/** Whether the provider's runtime dispatch accepts an API. */
+	supportsApi?(api: Api): boolean;
+
 	stream<T extends TApi>(
 		model: Model<T>,
 		context: Context,
@@ -736,7 +739,11 @@ export function createModels(options?: CreateModelsOptions): MutableModels {
 	return new ModelsImpl(options);
 }
 
-export interface CreateProviderOptions<TApi extends Api = Api> {
+export type CreatedProvider<TApi extends Api = Api> = Provider<TApi> & {
+	supportsApi(api: Api): boolean;
+};
+
+interface CreateProviderBaseOptions<TApi extends Api> {
 	id: string;
 	/** Display name. Default: `id`. */
 	name?: string;
@@ -749,17 +756,35 @@ export interface CreateProviderOptions<TApi extends Api = Api> {
 	/** Fetch a dynamic model overlay. createProvider restores and publishes it transactionally. */
 	fetchModels?: (context: RefreshModelsContext) => Promise<readonly Model<TApi>[]>;
 	filterModels?: (models: readonly Model<TApi>[], credential: Credential | undefined) => readonly Model<TApi>[];
-	/** Single implementation, or map keyed by `model.api` for mixed-API providers. */
-	api: ProviderStreams | Partial<Record<TApi, ProviderStreams>>;
 }
+
+export type CreateProviderOptions<TApi extends Api = Api> = CreateProviderBaseOptions<TApi> &
+	(
+		| {
+				/** Single implementation used only for models matching this API. */
+				api: ProviderStreams;
+				/**
+				 * Authoritative identity for a single implementation. May be omitted only
+				 * when the static baseline models all identify the same API.
+				 */
+				apiId?: TApi;
+		  }
+		| {
+				/** Implementations keyed by `model.api` for a mixed-API provider. */
+				api: Partial<Record<TApi, ProviderStreams>>;
+				apiId?: never;
+		  }
+	);
 
 /**
  * Builds a provider from parts. Built-in provider factories and models.json
- * custom providers both go through this. A single `api` streams all models;
- * an `api` map dispatches on `model.api`, and a model whose api has no entry
+ * custom providers both go through this. A single `api` dispatches models that
+ * match its config-level `apiId`; for compatibility, one unique API can be
+ * inferred from static baseline models. An `api` map uses only its keys for
+ * dispatch identity. A model whose API does not match or has no map entry
  * produces a stream error.
  */
-export function createProvider<TApi extends Api = Api>(input: CreateProviderOptions<TApi>): Provider<TApi> {
+export function createProvider<TApi extends Api = Api>(input: CreateProviderOptions<TApi>): CreatedProvider<TApi> {
 	const baselineModels = input.models;
 	let dynamicModels: readonly Model<TApi>[] = [];
 	const fetchModels = input.fetchModels;
@@ -775,8 +800,26 @@ export function createProvider<TApi extends Api = Api>(input: CreateProviderOpti
 	const single =
 		typeof (input.api as ProviderStreams).stream === "function" ? (input.api as ProviderStreams) : undefined;
 	const byApi = single ? undefined : (input.api as Partial<Record<string, ProviderStreams>>);
+	const singleApi: TApi | undefined = (() => {
+		if (!single) return undefined;
+		if (input.apiId !== undefined) return input.apiId;
+		const baselineApis = new Set(baselineModels.map((model) => model.api));
+		if (baselineApis.size === 1) return baselineApis.values().next().value as TApi;
+		throw new ModelsError(
+			"provider",
+			`Provider ${input.id} with a single API implementation must declare apiId when baseline models do not identify exactly one API`,
+		);
+	})();
 
-	const apiFor = (model: Model<Api>): ProviderStreams | undefined => single ?? byApi?.[model.api];
+	if (singleApi !== undefined && baselineModels.some((model) => model.api !== singleApi)) {
+		throw new ModelsError(
+			"provider",
+			`Provider ${input.id} has baseline models that do not match its single API implementation "${singleApi}"`,
+		);
+	}
+
+	const apiFor = (model: Model<Api>): ProviderStreams | undefined =>
+		single !== undefined ? (singleApi === model.api ? single : undefined) : byApi?.[model.api];
 
 	const dispatch = (
 		model: Model<Api>,
@@ -791,7 +834,7 @@ export function createProvider<TApi extends Api = Api>(input: CreateProviderOpti
 		return run(streams);
 	};
 
-	const provider: Provider<TApi> = {
+	const provider: CreatedProvider<TApi> = {
 		id: input.id,
 		name: input.name ?? input.id,
 		baseUrl: input.baseUrl,
@@ -826,6 +869,8 @@ export function createProvider<TApi extends Api = Api>(input: CreateProviderOpti
 				}
 			: undefined,
 		filterModels: input.filterModels,
+		supportsApi: (api) =>
+			single !== undefined ? singleApi === api : byApi !== undefined && Object.hasOwn(byApi, api),
 		stream: (model, context, options) => dispatch(model, (streams) => streams.stream(model, context, options)),
 		streamSimple: (model, context, options) =>
 			dispatch(model, (streams) => streams.streamSimple(model, context, options)),

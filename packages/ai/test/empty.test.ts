@@ -6,7 +6,11 @@ type StreamOptionsWithExtras = StreamOptions & Record<string, unknown>;
 
 import { hasAzureOpenAICredentials, resolveAzureDeploymentName } from "./azure-utils.ts";
 import { hasBedrockCredentials } from "./bedrock-utils.ts";
-import { hasCloudflareAiGatewayCredentials, hasCloudflareWorkersAICredentials } from "./cloudflare-utils.ts";
+import {
+	getCloudflareAiGatewayCompletionsModel,
+	hasCloudflareAiGatewayCredentials,
+	hasCloudflareWorkersAICredentials,
+} from "./cloudflare-utils.ts";
 import { resolveApiKey } from "./oauth.ts";
 
 // Resolve OAuth tokens at module level (async, runs before tests)
@@ -326,25 +330,29 @@ describe("AI Providers Empty Message Tests", () => {
 		});
 	});
 
-	describe.skipIf(!hasCloudflareAiGatewayCredentials())("Cloudflare AI Gateway Provider Empty Messages", () => {
-		const llm = getModel("cloudflare-ai-gateway", "workers-ai/@cf/moonshotai/kimi-k2.6");
+	const cloudflareAiGatewayModel = getCloudflareAiGatewayCompletionsModel();
+	describe.skipIf(!hasCloudflareAiGatewayCredentials() || !cloudflareAiGatewayModel)(
+		"Cloudflare AI Gateway Provider Empty Messages",
+		() => {
+			const llm = cloudflareAiGatewayModel!;
 
-		it("should handle empty content array", { retry: 3, timeout: 30000 }, async () => {
-			await testEmptyMessage(llm);
-		});
+			it("should handle empty content array", { retry: 3, timeout: 30000 }, async () => {
+				await testEmptyMessage(llm);
+			});
 
-		it("should handle empty string content", { retry: 3, timeout: 30000 }, async () => {
-			await testEmptyStringMessage(llm);
-		});
+			it("should handle empty string content", { retry: 3, timeout: 30000 }, async () => {
+				await testEmptyStringMessage(llm);
+			});
 
-		it("should handle whitespace-only content", { retry: 3, timeout: 30000 }, async () => {
-			await testWhitespaceOnlyMessage(llm);
-		});
+			it("should handle whitespace-only content", { retry: 3, timeout: 30000 }, async () => {
+				await testWhitespaceOnlyMessage(llm);
+			});
 
-		it("should handle empty assistant message in conversation", { retry: 3, timeout: 30000 }, async () => {
-			await testEmptyAssistantMessage(llm);
-		});
-	});
+			it("should handle empty assistant message in conversation", { retry: 3, timeout: 30000 }, async () => {
+				await testEmptyAssistantMessage(llm);
+			});
+		},
+	);
 
 	describe.skipIf(!process.env.HF_TOKEN)("Hugging Face Provider Empty Messages", () => {
 		const llm = getModel("huggingface", "moonshotai/Kimi-K2.5");

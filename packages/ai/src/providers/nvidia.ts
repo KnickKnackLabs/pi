@@ -10,6 +10,7 @@ export function nvidiaProvider(): Provider<"openai-completions"> {
 		baseUrl: "https://integrate.api.nvidia.com/v1",
 		auth: { apiKey: envApiKeyAuth("NVIDIA API key", ["NVIDIA_API_KEY"]) },
 		models: Object.values(NVIDIA_MODELS),
+		apiId: "openai-completions",
 		api: openAICompletionsApi(),
 	});
 }

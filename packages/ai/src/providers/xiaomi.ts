@@ -10,6 +10,7 @@ export function xiaomiProvider(): Provider<"openai-completions"> {
 		baseUrl: "https://api.xiaomimimo.com/v1",
 		auth: { apiKey: envApiKeyAuth("Xiaomi API key", ["XIAOMI_API_KEY"]) },
 		models: Object.values(XIAOMI_MODELS),
+		apiId: "openai-completions",
 		api: openAICompletionsApi(),
 	});
 }

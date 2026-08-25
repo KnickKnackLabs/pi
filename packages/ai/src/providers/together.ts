@@ -10,6 +10,7 @@ export function togetherProvider(): Provider<"openai-completions"> {
 		baseUrl: "https://api.together.ai/v1",
 		auth: { apiKey: envApiKeyAuth("Together API key", ["TOGETHER_API_KEY"]) },
 		models: Object.values(TOGETHER_MODELS),
+		apiId: "openai-completions",
 		api: openAICompletionsApi(),
 	});
 }

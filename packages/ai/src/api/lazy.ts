@@ -71,7 +71,7 @@ export interface LazyApiCapabilities {
 }
 
 export function lazyApi(load: () => Promise<ProviderStreams>, capabilities?: LazyApiCapabilities): ProviderStreams {
-	const api: ProviderStreams = {
+	const streams: ProviderStreams = {
 		stream: (model, context, options) =>
 			lazyStream(model, async () => (await load()).stream(model, context, options)),
 		streamSimple: (model, context, options) =>
@@ -79,7 +79,7 @@ export function lazyApi(load: () => Promise<ProviderStreams>, capabilities?: Laz
 	};
 
 	if (capabilities?.fetchDeferred) {
-		api.fetchDeferred = (model, handle, options) =>
+		streams.fetchDeferred = (model, handle, options) =>
 			lazyStream(model, async () => {
 				const implementation = await load();
 				if (!implementation.fetchDeferred) throw new Error("API does not support deferred responses");
@@ -87,12 +87,12 @@ export function lazyApi(load: () => Promise<ProviderStreams>, capabilities?: Laz
 			});
 	}
 	if (capabilities?.cancelDeferred) {
-		api.cancelDeferred = async (model, handle, options) => {
+		streams.cancelDeferred = async (model, handle, options) => {
 			const implementation = await load();
 			if (!implementation.cancelDeferred) throw new Error("API cannot cancel deferred responses");
 			await implementation.cancelDeferred(model, handle, options);
 		};
 	}
 
-	return api;
+	return streams;
 }

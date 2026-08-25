@@ -58,6 +58,7 @@ export default function (pi: ExtensionAPI) {
       }
     },
     models: [],
+    apiId: "openai-completions",
     api: openAICompletionsApi()
   }));
 

@@ -85,6 +85,7 @@ export function amazonBedrockProvider(): Provider<"bedrock-converse-stream"> {
 		name: "Amazon Bedrock",
 		auth: { apiKey: bedrockAuth },
 		models: Object.values(AMAZON_BEDROCK_MODELS),
+		apiId: "bedrock-converse-stream",
 		api: bedrockConverseStreamApi(),
 	});
 }

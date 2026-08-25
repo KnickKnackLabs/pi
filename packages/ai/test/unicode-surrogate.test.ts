@@ -7,7 +7,11 @@ type StreamOptionsWithExtras = StreamOptions & Record<string, unknown>;
 
 import { hasAzureOpenAICredentials, resolveAzureDeploymentName } from "./azure-utils.ts";
 import { hasBedrockCredentials } from "./bedrock-utils.ts";
-import { hasCloudflareAiGatewayCredentials, hasCloudflareWorkersAICredentials } from "./cloudflare-utils.ts";
+import {
+	getCloudflareAiGatewayCompletionsModel,
+	hasCloudflareAiGatewayCredentials,
+	hasCloudflareWorkersAICredentials,
+} from "./cloudflare-utils.ts";
 import { resolveApiKey } from "./oauth.ts";
 
 // Empty schema for test tools - must be proper OBJECT type for Cloud Code Assist
@@ -513,21 +517,29 @@ describe("AI Providers Unicode Surrogate Pair Tests", () => {
 		});
 	});
 
-	describe.skipIf(!hasCloudflareAiGatewayCredentials())("Cloudflare AI Gateway Provider Unicode Handling", () => {
-		const llm = getModel("cloudflare-ai-gateway", "workers-ai/@cf/moonshotai/kimi-k2.6");
+	const cloudflareAiGatewayModel = getCloudflareAiGatewayCompletionsModel();
+	describe.skipIf(!hasCloudflareAiGatewayCredentials() || !cloudflareAiGatewayModel)(
+		"Cloudflare AI Gateway Provider Unicode Handling",
+		() => {
+			const llm = cloudflareAiGatewayModel!;
 
-		it("should handle emoji in tool results", { retry: 3, timeout: 30000 }, async () => {
-			await testEmojiInToolResults(llm);
-		});
+			it("should handle emoji in tool results", { retry: 3, timeout: 30000 }, async () => {
+				await testEmojiInToolResults(llm);
+			});
 
-		it("should handle real-world LinkedIn comment data with emoji", { retry: 3, timeout: 30000 }, async () => {
-			await testRealWorldLinkedInData(llm);
-		});
+			it("should handle real-world LinkedIn comment data with emoji", { retry: 3, timeout: 30000 }, async () => {
+				await testRealWorldLinkedInData(llm);
+			});
 
-		it("should handle unpaired high surrogate (0xD83D) in tool results", { retry: 3, timeout: 30000 }, async () => {
-			await testUnpairedHighSurrogate(llm);
-		});
-	});
+			it(
+				"should handle unpaired high surrogate (0xD83D) in tool results",
+				{ retry: 3, timeout: 30000 },
+				async () => {
+					await testUnpairedHighSurrogate(llm);
+				},
+			);
+		},
+	);
 
 	describe.skipIf(!process.env.HF_TOKEN)("Hugging Face Provider Unicode Handling", () => {
 		const llm = getModel("huggingface", "moonshotai/Kimi-K2.5");

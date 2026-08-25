@@ -18,6 +18,7 @@ export function openrouterProvider(): Provider<"openai-completions"> {
 			}),
 		},
 		models: Object.values(OPENROUTER_MODELS),
+		apiId: "openai-completions",
 		api: openAICompletionsApi(),
 	});
 }

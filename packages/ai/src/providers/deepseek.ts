@@ -10,6 +10,7 @@ export function deepseekProvider(): Provider<"openai-completions"> {
 		baseUrl: "https://api.deepseek.com",
 		auth: { apiKey: envApiKeyAuth("DeepSeek API key", ["DEEPSEEK_API_KEY"]) },
 		models: Object.values(DEEPSEEK_MODELS),
+		apiId: "openai-completions",
 		api: openAICompletionsApi(),
 	});
 }

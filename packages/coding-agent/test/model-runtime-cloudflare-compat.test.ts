@@ -1,10 +1,27 @@
-import { complete, resetApiProviders } from "@earendil-works/pi-ai/compat";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { complete, type Model, resetApiProviders } from "@earendil-works/pi-ai/compat";
+import { cloudflareAIGatewayProvider } from "@earendil-works/pi-ai/providers/cloudflare-ai-gateway";
 import { describe, expect, it, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { ModelRegistry } from "../src/core/model-registry.ts";
 import { ModelRuntime } from "../src/core/model-runtime.ts";
 
 const openAIState = vi.hoisted(() => ({ clientOptions: undefined as unknown }));
+
+const cloudflareCompletionsModel: Model<"openai-completions"> = {
+	id: "workers-ai/test-completions",
+	name: "Cloudflare completions test model",
+	api: "openai-completions",
+	provider: "cloudflare-ai-gateway",
+	baseUrl: "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/compat",
+	reasoning: true,
+	input: ["text"],
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	contextWindow: 128_000,
+	maxTokens: 8_192,
+};
 
 vi.mock("openai", () => {
 	class FakeOpenAI {
@@ -53,13 +70,17 @@ async function createCloudflareRuntime(): Promise<{ modelRuntime: ModelRuntime; 
 		},
 	}));
 	const modelRuntime = await ModelRuntime.create({ credentials: authStorage, modelsPath: null });
+	modelRuntime.registerNativeProvider({
+		...cloudflareAIGatewayProvider(),
+		getModels: () => [cloudflareCompletionsModel],
+	});
 	return { modelRuntime, modelRegistry: new ModelRegistry(modelRuntime) };
 }
 
 describe("ModelRegistry Cloudflare compat streaming", () => {
 	it("materializes the Cloudflare endpoint through ModelRuntime streaming", async () => {
 		const { modelRuntime } = await createCloudflareRuntime();
-		const model = modelRuntime.getModel("cloudflare-ai-gateway", "workers-ai/@cf/moonshotai/kimi-k2.6");
+		const model = modelRuntime.getModel("cloudflare-ai-gateway", cloudflareCompletionsModel.id);
 		expect(model).toBeDefined();
 
 		resetApiProviders();
@@ -75,7 +96,7 @@ describe("ModelRegistry Cloudflare compat streaming", () => {
 
 	it("materializes the Cloudflare endpoint after extension-style auth resolution", async () => {
 		const { modelRegistry } = await createCloudflareRuntime();
-		const model = modelRegistry.find("cloudflare-ai-gateway", "workers-ai/@cf/moonshotai/kimi-k2.6");
+		const model = modelRegistry.find("cloudflare-ai-gateway", cloudflareCompletionsModel.id);
 		expect(model).toBeDefined();
 
 		resetApiProviders();
@@ -98,5 +119,53 @@ describe("ModelRegistry Cloudflare compat streaming", () => {
 		expect(clientOptions.defaultHeaders?.["cf-aig-authorization"]).toBe("Bearer test-token");
 		expect(clientOptions.defaultHeaders?.Authorization).toBeNull();
 		expect(clientOptions.defaultHeaders?.["x-api-key"]).toBeNull();
+	});
+
+	it("routes a models.json API through the base provider when its catalog is empty", async () => {
+		const tempDir = mkdtempSync(join(tmpdir(), "pi-cloudflare-composer-"));
+		const modelsPath = join(tempDir, "models.json");
+		writeFileSync(
+			modelsPath,
+			JSON.stringify({
+				providers: {
+					"cloudflare-ai-gateway": { models: [cloudflareCompletionsModel] },
+				},
+			}),
+		);
+		try {
+			const authStorage = AuthStorage.inMemory();
+			await authStorage.modify("cloudflare-ai-gateway", async () => ({
+				type: "api_key",
+				key: "test-token",
+				env: {
+					CLOUDFLARE_ACCOUNT_ID: "test-account",
+					CLOUDFLARE_GATEWAY_ID: "test-gateway",
+				},
+			}));
+			const modelRuntime = await ModelRuntime.create({
+				credentials: authStorage,
+				modelsPath,
+				allowModelNetwork: false,
+			});
+			modelRuntime.registerNativeProvider({
+				...cloudflareAIGatewayProvider(),
+				getModels: () => [],
+			});
+			const model = modelRuntime.getModel("cloudflare-ai-gateway", cloudflareCompletionsModel.id);
+			expect(model).toBeDefined();
+			expect(modelRuntime.getProvider("cloudflare-ai-gateway")?.supportsApi?.("openai-completions")).toBe(true);
+
+			resetApiProviders();
+			await modelRuntime.completeSimple(model!, { messages: [] });
+
+			const clientOptions = openAIState.clientOptions as {
+				baseURL?: string;
+				defaultHeaders?: Record<string, unknown>;
+			};
+			expect(clientOptions.baseURL).toBe("https://gateway.ai.cloudflare.com/v1/test-account/test-gateway/compat");
+			expect(clientOptions.defaultHeaders?.["cf-aig-authorization"]).toBe("Bearer test-token");
+		} finally {
+			rmSync(tempDir, { recursive: true, force: true });
+		}
 	});
 });

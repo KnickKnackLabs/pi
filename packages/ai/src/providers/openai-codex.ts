@@ -17,6 +17,7 @@ export function openaiCodexProvider(): Provider<"openai-codex-responses"> {
 			}),
 		},
 		models: Object.values(OPENAI_CODEX_MODELS),
+		apiId: "openai-codex-responses",
 		api: openAICodexResponsesApi(),
 	});
 }

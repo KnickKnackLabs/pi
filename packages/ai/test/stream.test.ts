@@ -12,7 +12,11 @@ type StreamOptionsWithExtras = StreamOptions & Record<string, unknown>;
 import { StringEnum } from "../src/utils/typebox-helpers.ts";
 import { hasAzureOpenAICredentials, resolveAzureDeploymentName } from "./azure-utils.ts";
 import { hasBedrockCredentials } from "./bedrock-utils.ts";
-import { hasCloudflareAiGatewayCredentials, hasCloudflareWorkersAICredentials } from "./cloudflare-utils.ts";
+import {
+	getCloudflareAiGatewayReasoningCompletionsModel,
+	hasCloudflareAiGatewayCredentials,
+	hasCloudflareWorkersAICredentials,
+} from "./cloudflare-utils.ts";
 import { resolveApiKey } from "./oauth.ts";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -641,10 +645,11 @@ describe("Generate E2E Tests", () => {
 		},
 	);
 
-	describe.skipIf(!hasCloudflareAiGatewayCredentials())(
-		"Cloudflare AI Gateway → Workers AI (Kimi K2.6 via /compat)",
+	const cloudflareAiGatewayModel = getCloudflareAiGatewayReasoningCompletionsModel();
+	describe.skipIf(!hasCloudflareAiGatewayCredentials() || !cloudflareAiGatewayModel)(
+		"Cloudflare AI Gateway → reasoning completions model via /compat",
 		() => {
-			const llm = getModel("cloudflare-ai-gateway", "workers-ai/@cf/moonshotai/kimi-k2.6");
+			const llm = cloudflareAiGatewayModel!;
 
 			it("should complete basic text generation", { retry: 3 }, async () => {
 				await basicTextGeneration(llm);
