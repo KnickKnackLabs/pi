@@ -11,14 +11,20 @@ const FALLBACK_PREVIEW_LINES = 10;
 export interface ToolExecutionOptions {
 	showImages?: boolean;
 	imageWidthCells?: number;
+	/** Resolve the current whole-row presentation wrapper without replacing this tool's captured behavior. */
+	resolveRowRenderer?: () => ToolDefinition<any, any>["renderRow"] | undefined;
 }
 
 export class ToolExecutionComponent extends Container {
 	private contentBox: Box;
 	private contentText: Text;
 	private selfRenderContainer: Container;
+	private rowRendererComponent?: Component;
+	private appliedRowRenderer?: ToolDefinition<any, any>["renderRow"];
+	private readonly resolveRowRenderer?: ToolExecutionOptions["resolveRowRenderer"];
 	private callRendererComponent?: Component;
 	private resultRendererComponent?: Component;
+	private readonly nativeRowComponent: Component;
 	private rendererState: any = {};
 	private imageComponents: Image[] = [];
 	private imageSpacers: Spacer[] = [];
@@ -61,13 +67,20 @@ export class ToolExecutionComponent extends Container {
 		this.args = args;
 		this.callMessage = callMessage;
 		this.toolDefinition = toolDefinition;
+		this.resolveRowRenderer = options.resolveRowRenderer;
 		this.builtInToolDefinition = createAllToolDefinitions(cwd)[toolName as ToolName];
 		this.showImages = options.showImages ?? true;
 		this.imageWidthCells = options.imageWidthCells ?? 60;
 		this.ui = ui;
 		this.cwd = cwd;
+		this.nativeRowComponent = {
+			render: (width) => this.renderNative(width),
+			invalidate: () => this.invalidateNativeRow(),
+		};
 
-		this.addChild(new Spacer(1));
+		if (this.getRenderSpacing() === "default") {
+			this.addChild(new Spacer(1));
+		}
 
 		// Always create all shell variants. contentBox is used for default renderer-based composition.
 		// selfRenderContainer is used when the tool renders its own framing.
@@ -83,6 +96,19 @@ export class ToolExecutionComponent extends Container {
 		}
 
 		this.updateDisplay();
+	}
+
+	private getRowRenderer(): ToolDefinition<any, any>["renderRow"] | undefined {
+		if (this.resolveRowRenderer) {
+			return this.resolveRowRenderer();
+		}
+		if (!this.builtInToolDefinition) {
+			return this.toolDefinition?.renderRow;
+		}
+		if (!this.toolDefinition) {
+			return this.builtInToolDefinition.renderRow;
+		}
+		return this.toolDefinition.renderRow ?? this.builtInToolDefinition.renderRow;
 	}
 
 	private getCallRenderer(): ToolDefinition<any, any>["renderCall"] | undefined {
@@ -119,6 +145,16 @@ export class ToolExecutionComponent extends Container {
 		return this.toolDefinition.renderShell ?? this.builtInToolDefinition.renderShell ?? "default";
 	}
 
+	private getRenderSpacing(): "default" | "self" {
+		if (!this.builtInToolDefinition) {
+			return this.toolDefinition?.renderSpacing ?? "default";
+		}
+		if (!this.toolDefinition) {
+			return this.builtInToolDefinition.renderSpacing ?? "default";
+		}
+		return this.toolDefinition.renderSpacing ?? this.builtInToolDefinition.renderSpacing ?? "default";
+	}
+
 	private getRenderContext(lastComponent: Component | undefined): ToolRenderContext {
 		return {
 			callMessage: this.callMessage,
@@ -139,6 +175,35 @@ export class ToolExecutionComponent extends Container {
 			showImages: this.showImages,
 			isError: this.result?.isError ?? false,
 		};
+	}
+
+	private invalidateNativeRow(): void {
+		super.invalidate();
+	}
+
+	private updateRowRenderer(): void {
+		const renderRow = this.getRowRenderer();
+		this.appliedRowRenderer = renderRow;
+		if (!renderRow) {
+			this.rowRendererComponent = undefined;
+			return;
+		}
+
+		try {
+			this.rowRendererComponent = renderRow(
+				this.nativeRowComponent,
+				theme,
+				this.getRenderContext(this.rowRendererComponent),
+			);
+		} catch {
+			this.rowRendererComponent = undefined;
+		}
+	}
+
+	private refreshRowRendererIfChanged(): void {
+		if (this.getRowRenderer() === this.appliedRowRenderer) return;
+		this.rowRendererComponent = undefined;
+		this.updateRowRenderer();
 	}
 
 	private createCallFallback(): Component {
@@ -245,22 +310,20 @@ export class ToolExecutionComponent extends Container {
 		this.updateDisplay();
 	}
 
-	override render(width: number): string[] {
+	private renderNative(width: number): string[] {
 		if (this.hideComponent) {
 			return [];
 		}
 
 		if (this.hasRendererDefinition() && this.getRenderShell() === "self") {
 			const contentLines = this.selfRenderContainer.render(width);
-			if (contentLines.length === 0 && this.imageComponents.length === 0) {
+			if (contentLines.length === 0) {
 				return [];
 			}
 
 			const lines: string[] = [];
-			if (contentLines.length > 0) {
-				lines.push("");
-				lines.push(...contentLines);
-			}
+			if (this.getRenderSpacing() === "default") lines.push("");
+			lines.push(...contentLines);
 			for (let i = 0; i < this.imageComponents.length; i++) {
 				const spacer = this.imageSpacers[i];
 				if (spacer) {
@@ -275,6 +338,11 @@ export class ToolExecutionComponent extends Container {
 		}
 
 		return super.render(width);
+	}
+
+	override render(width: number): string[] {
+		this.refreshRowRendererIfChanged();
+		return (this.rowRendererComponent ?? this.nativeRowComponent).render(width);
 	}
 
 	private updateDisplay(): void {
@@ -383,6 +451,7 @@ export class ToolExecutionComponent extends Container {
 		if (this.hasRendererDefinition() && !hasContent && this.imageComponents.length === 0) {
 			this.hideComponent = true;
 		}
+		this.updateRowRenderer();
 	}
 
 	private getTextOutput(): string {

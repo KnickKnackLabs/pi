@@ -1663,7 +1663,7 @@ Register a custom TUI renderer for custom messages with your `customType`. Custo
 
 Wrap Pi's configured transcript renderer for built-in `"user"` or `"assistant"` messages. The transform receives the current renderer and returns another synchronous renderer. Several transforms compose in extension load order, with later transforms wrapping earlier ones.
 
-Each renderer receives the complete message, the current theme, and `{ expanded, outputPad, isStreaming }`. The message is an isolated snapshot, so mutations affect only the current render chain and cannot change the session or model context. Calling the current renderer preserves Pi's native Markdown, thinking, error, and extension-transform behavior:
+Each renderer receives the complete message, the current theme, and `{ expanded, outputPad, isStreaming, entryId, segmentNumber, segmentKind, inputKind }`. Segment fields are available only for tracked sessions. Live messages receive provisional segment fields before persistence; `entryId` appears only after the message has a canonical session entry. The message is an isolated snapshot, so mutations affect only the current render chain and cannot change the session or model context. Calling the current renderer preserves Pi's native Markdown, thinking, error, and extension-transform behavior:
 
 ```typescript
 pi.registerBuiltInMessageRenderer("assistant", (current) => {
@@ -1685,7 +1685,7 @@ See [built-in-message-renderer.ts](../examples/extensions/built-in-message-rende
 
 Wrap the visual boundary Pi inserts before each user turn after the first. Without an override, the boundary is Pi's existing blank one-line spacer. The transform receives the current renderer and returns another synchronous renderer; multiple extensions compose in load order, with later transforms wrapping earlier ones.
 
-The renderer receives `{ message, source, isReplay }` and the current theme. `message` is an isolated snapshot. `source` is `"interactive"`, `"rpc"`, or `"extension"` for live prompts that enter through the corresponding input path. It is undefined for restored messages and direct `steer()` or `followUp()` calls whose origin is not known. `isReplay` is true while Pi reconstructs a saved transcript.
+The renderer receives `{ message, renderContext, source, isReplay }` and the current theme. `message` is an isolated snapshot. `renderContext` contains the same optional segment fields as a built-in message renderer. Its `entryId` is absent while a live message is provisional and appears after persistence or during replay. `source` is `"interactive"`, `"rpc"`, or `"extension"` for live prompts that enter through the corresponding input path. It is undefined for restored messages and direct `steer()` or `followUp()` calls whose origin is not known. `isReplay` is true while Pi reconstructs a saved transcript.
 
 Pi does not invoke the hook for the first rendered user message because there is no preceding turn to separate. Normal and skill-invocation user turns share the same outer boundary. If a transform throws or returns an invalid component, Pi falls back to the previous renderer layer.
 
@@ -2372,7 +2372,13 @@ Tools can provide `renderCall` and `renderResult` for custom TUI display. See [t
 
 By default, tool output is wrapped in a `Box` that handles padding and background. A defined `renderCall` or `renderResult` must return a `Component`. If a slot renderer is not defined, `tool-execution.ts` uses fallback rendering for that slot.
 
-Set `renderShell: "self"` when the tool should render its own shell instead of using the default `Box`. This is useful for tools that need complete control over framing or background behavior, for example large previews that must stay visually stable after the tool settles.
+Set `renderShell: "self"` when the tool should render its own shell instead of using the default `Box`. This is useful for tools that need complete control over framing or background behavior, for example large previews that must stay visually stable after the tool settles. When the composed self-shell component renders no lines, Pi suppresses the complete tool row, including auxiliary image output owned by the host.
+
+By default, `ToolExecutionComponent` also owns one blank row before the tool. Set `renderSpacing: "self"` when the renderer owns all leading vertical spacing. Same-name tool replacements inherit both `renderShell` and `renderSpacing` from their fallback definition unless they override them.
+
+Use `renderRow(component, theme, context)` to wrap the complete native tool row after Pi assembles its default or custom shell, slot renderers, leading spacing, and auxiliary images. This also works for tools without `renderCall` or `renderResult`, so transforms can frame or hide Pi's generic fallback without recreating it. Return the supplied `component` unchanged when no wrapper behavior is needed, or return an empty component to suppress the complete row.
+
+Interactive historical tool rows re-resolve this whole-row presentation layer after `/reload` and repaint once reloaded extensions finish registering. Their captured execution, schema, arguments, result identity, and native slot renderers do not change.
 
 ```typescript
 pi.registerTool({
@@ -2390,14 +2396,16 @@ pi.registerTool({
 });
 ```
 
-`renderCall` and `renderResult` each receive a `context` object with:
+`renderRow`, `renderCall`, and `renderResult` each receive a `context` object with:
+- `callMessage` - renderer context for the assistant message that owns the call
+- `resultMessage` - renderer context for the tool-result message once one exists
 - `args` - the current tool call arguments
 - `state` - shared row-local state across `renderCall` and `renderResult`
-- `lastComponent` - the previously returned component for that slot, if any
+- `lastComponent` - the previously returned component for that slot or whole-row wrapper, if any
 - `invalidate()` - request a rerender of this tool row
 - `toolCallId`, `cwd`, `executionStarted`, `argsComplete`, `isPartial`, `expanded`, `showImages`, `isError`
 
-Use `context.state` for cross-slot shared state. Keep slot-local caches on the returned component instance when you want to reuse and mutate the same component across renders.
+`callMessage` and `resultMessage` carry provisional segment identity while live and canonical `entryId` values after persistence or during replay. Use `context.state` for cross-slot shared state. Keep slot-local caches on the returned component instance when you want to reuse and mutate the same component across renders.
 
 #### renderCall
 
@@ -2442,7 +2450,7 @@ renderResult(result, { expanded, isPartial }, theme, context) {
 }
 ```
 
-If a slot intentionally has no visible content, return an empty `Component` such as an empty `Container`.
+If a slot intentionally has no visible content, return an empty `Component` such as an empty `Container`. A `renderRow` wrapper receives Pi's complete native row as its first argument and can return an empty component to hide default renderers and host-owned auxiliary rows together.
 
 #### Keybinding Hints
 
@@ -2483,7 +2491,8 @@ Custom editors and `ctx.ui.custom()` components receive `keybindings: Keybinding
 - Read `context.args` in `renderResult` instead of copying args into `context.state`.
 - Use `context.state` only for data that must be shared across call and result slots.
 - Reuse `context.lastComponent` when the same component instance can be updated in place.
-- Use `renderShell: "self"` only when the default boxed shell gets in the way. In self-shell mode the tool is responsible for its own framing, padding, and background.
+- Use `renderShell: "self"` only when the default boxed shell gets in the way. In self-shell mode the tool is responsible for its own framing, padding, and background; empty output suppresses the complete row, including host-owned images.
+- Use `renderSpacing: "self"` only when the renderer deliberately owns every leading row; an empty self-rendered component then occupies no vertical space.
 
 #### Fallback
 
@@ -2637,6 +2646,7 @@ Extensions can interact with users via `ctx.ui` methods and customize how messag
 - Async operations with cancel (BorderedLoader)
 - Settings toggles (SettingsList)
 - Status indicators (setStatus)
+- Immediate redraws after changing extension-owned presentation state (`requestRender?.()`)
 - Working message, visibility, and indicator during streaming (`setWorkingMessage`, `setWorkingVisible`, `setWorkingIndicator`)
 - Widgets above/below editor (setWidget)
 - Autocomplete providers layered on top of built-in slash/path completion (addAutocompleteProvider)
@@ -2659,7 +2669,12 @@ const text = await ctx.ui.editor("Edit:", "prefilled text");
 
 // Notification (non-blocking)
 ctx.ui.notify("Done!", "info");  // "info" | "warning" | "error"
+
+// Redraw after changing extension-owned presentation state
+ctx.ui.requestRender?.();
 ```
+
+`requestRender` is optional so existing hosts and test doubles remain source-compatible. The interactive TUI provides it; RPC and print modes provide a no-op. Use optional chaining when requesting a redraw.
 
 #### Timed Dialogs with Countdown
 

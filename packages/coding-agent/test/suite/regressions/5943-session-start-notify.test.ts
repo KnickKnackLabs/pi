@@ -15,6 +15,7 @@ function createUiContext(
 		confirm: async () => false,
 		input: async () => undefined,
 		notify: onNotify,
+		requestRender: () => {},
 		onTerminalInput: () => () => {},
 		setStatus: () => {},
 		setWorkingMessage: () => {},
@@ -109,6 +110,7 @@ type ReloadCommandContext = {
 	customHeader?: unknown;
 	builtInHeader?: unknown;
 	editorContainer: { clear: () => void; addChild: (component: unknown) => void };
+	chatContainer: { invalidate: () => void };
 	ui: {
 		setFocus: (component: unknown) => void;
 		requestRender: (force?: boolean) => void;
@@ -142,12 +144,20 @@ const interactiveModePrototype = InteractiveMode.prototype as unknown as Interac
 
 type ReloadCommandContextOverrides = Omit<
 	Partial<ReloadCommandContext>,
-	"session" | "settingsManager" | "keybindings" | "editorContainer" | "ui" | "defaultEditor" | "themeController"
+	| "session"
+	| "settingsManager"
+	| "keybindings"
+	| "editorContainer"
+	| "chatContainer"
+	| "ui"
+	| "defaultEditor"
+	| "themeController"
 > & {
 	session?: Partial<ReloadCommandContext["session"]>;
 	settingsManager?: Partial<ReloadCommandContext["settingsManager"]>;
 	keybindings?: Partial<ReloadCommandContext["keybindings"]>;
 	editorContainer?: Partial<ReloadCommandContext["editorContainer"]>;
+	chatContainer?: Partial<ReloadCommandContext["chatContainer"]>;
 	ui?: Partial<ReloadCommandContext["ui"]>;
 	defaultEditor?: Partial<ReloadCommandContext["defaultEditor"]>;
 	themeController?: Partial<ReloadCommandContext["themeController"]>;
@@ -180,6 +190,7 @@ function createReloadCommandContext(overrides: ReloadCommandContextOverrides = {
 		},
 		keybindings: { reload: () => {}, ...overrides.keybindings },
 		editorContainer: { clear: () => {}, addChild: () => {}, ...overrides.editorContainer },
+		chatContainer: { invalidate: () => {}, ...overrides.chatContainer },
 		ui: {
 			setFocus: () => {},
 			requestRender: () => {},
@@ -446,6 +457,26 @@ describe("regression #5943: session_start transient UI", () => {
 		} finally {
 			harness.cleanup();
 		}
+	});
+
+	it("invalidates restored tool presentation after reload session_start", async () => {
+		initTheme("dark", false);
+		const events: string[] = [];
+		const context = createReloadCommandContext({
+			session: {
+				reload: async (options) => {
+					events.push("reload");
+					await options?.beforeSessionStart?.();
+					events.push("session_start");
+				},
+			},
+			rebuildChatFromMessages: () => events.push("rebuild"),
+			chatContainer: { invalidate: () => events.push("invalidate") },
+		});
+
+		await interactiveModePrototype.handleReloadCommand.call(context);
+
+		expect(events).toEqual(["reload", "rebuild", "session_start", "invalidate"]);
 	});
 
 	it("refreshes hideThinkingBlock before rebuilding chat during reload", async () => {

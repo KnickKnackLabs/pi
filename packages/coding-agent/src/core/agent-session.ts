@@ -81,6 +81,7 @@ import {
 	type MessageUpdateEvent,
 	type QueueCommandOptions,
 	type ReplacedSessionContext,
+	type SegmentRuntimeEventContext,
 	type SessionBeforeCompactResult,
 	type SessionBeforeTreeResult,
 	type SessionCompactFailedEvent,
@@ -171,7 +172,7 @@ export type AgentSessionEvent =
 			messages: AgentMessage[];
 			willRetry: boolean;
 	  }
-	| { type: "agent_settled" }
+	| ({ type: "agent_settled" } & SegmentRuntimeEventContext)
 	| {
 			type: "queue_update";
 			steering: readonly string[];
@@ -351,8 +352,12 @@ export class AgentSession {
 	private _inputKinds = new WeakMap<AgentMessage, InputKind>();
 	private _userSegments = new WeakMap<AgentMessage, SegmentMetadata>();
 	private _messageRenderContexts = new WeakMap<AgentMessage, SessionMessageRenderContext>();
+	private _messageSegmentStartedAt = new WeakMap<AgentMessage, number>();
 	private _activeAgentSegment: AgentSegmentMetadata | undefined;
+	private _activeAgentSegmentStartedAt: number | undefined;
+	private _activeAgentSegmentRetryCount = 0;
 	private _agentSegmentPending = false;
+	private _pendingAgentSegmentStartedAt: number | undefined;
 	private _isAgentRunActive = false;
 	private _pendingExtensionMessageActions = 0;
 	private _idleWaitPromise: Promise<void> | undefined;
@@ -452,7 +457,7 @@ export class AgentSession {
 		return this._modelRuntime;
 	}
 
-	/** Return canonical renderer context after this exact in-memory message has been persisted. */
+	/** Return provisional segment context while a message is live, then canonical entry context after persistence. */
 	getMessageRenderContext(message: AgentMessage): SessionMessageRenderContext | undefined {
 		return this._messageRenderContexts.get(message);
 	}
@@ -660,10 +665,16 @@ export class AgentSession {
 
 	private async _emitAgentSettled(): Promise<void> {
 		this._isAgentRunActive = false;
+		const event = { type: "agent_settled" as const, ...this._segmentRuntimeEventContext() };
 		try {
-			await this._extensionRunner.emit({ type: "agent_settled" });
-			this._emit({ type: "agent_settled" });
+			await this._extensionRunner.emit(event);
+			this._emit(event);
 		} finally {
+			this._activeAgentSegment = undefined;
+			this._activeAgentSegmentStartedAt = undefined;
+			this._activeAgentSegmentRetryCount = 0;
+			this._agentSegmentPending = false;
+			this._pendingAgentSegmentStartedAt = undefined;
 			this._resolveIdleWaitIfIdle();
 		}
 	}
@@ -679,8 +690,48 @@ export class AgentSession {
 			return undefined;
 		}
 		this._activeAgentSegment = this.sessionManager.allocateSegment("agent");
+		this._activeAgentSegmentStartedAt = this._pendingAgentSegmentStartedAt ?? Date.now();
+		this._activeAgentSegmentRetryCount = 0;
 		this._agentSegmentPending = false;
+		this._pendingAgentSegmentStartedAt = undefined;
 		return this._activeAgentSegment;
+	}
+
+	private _prepareProvisionalMessageContext(message: AgentMessage): void {
+		if (message.role !== "user" && message.role !== "assistant" && message.role !== "toolResult") {
+			return;
+		}
+		const segment = message.role === "user" ? this._userSegments.get(message) : this._ensureActiveAgentSegment();
+		if (!segment) return;
+		const inputKind = message.role === "user" ? this._inputKinds.get(message) : undefined;
+		this._segmentOptionsForMessage(message, segment, inputKind);
+		this._messageRenderContexts.set(message, {
+			segmentNumber: segment.segmentNumber,
+			segmentKind: segment.segmentKind,
+			...(inputKind ? { inputKind } : {}),
+		});
+	}
+
+	private _segmentRuntimeEventContext(message?: AgentMessage): SegmentRuntimeEventContext {
+		const renderContext = message
+			? this._messageRenderContexts.get(message)
+			: this._activeAgentSegment
+				? {
+						segmentNumber: this._activeAgentSegment.segmentNumber,
+						segmentKind: this._activeAgentSegment.segmentKind,
+					}
+				: undefined;
+		if (!renderContext) return {};
+		const isAgentSegment = renderContext.segmentKind === "agent";
+		return {
+			renderContext,
+			segmentStartedAt: isAgentSegment
+				? this._activeAgentSegmentStartedAt
+				: message
+					? this._messageSegmentStartedAt.get(message)
+					: undefined,
+			segmentRetryCount: isAgentSegment ? this._activeAgentSegmentRetryCount : undefined,
+		};
 	}
 
 	private _segmentOptionsForMessage(
@@ -706,28 +757,38 @@ export class AgentSession {
 
 	/** Internal handler for agent events - shared by subscribe and reconnect */
 	private _handleAgentEvent = async (event: AgentEvent): Promise<void> => {
-		if (event.type === "agent_start") {
-			this._activeAgentSegment = undefined;
+		if (event.type === "agent_start" && !this._activeAgentSegment) {
 			this._agentSegmentPending = true;
+			this._pendingAgentSegmentStartedAt ??= Date.now();
+			this._ensureActiveAgentSegment();
 		}
 
 		// When a user message starts, check if it's from either queue and remove it BEFORE emitting
 		// This ensures the UI sees the updated queue state
 		if (event.type === "message_start" && event.message.role === "user") {
 			this._overflowRecoveryAttempted = false;
+			const acceptedAt = Date.now();
+			this._messageSegmentStartedAt.set(event.message, acceptedAt);
 			const inputKind = this._inputKinds.get(event.message);
 			if (inputKind === "steer") {
 				const segment = this._ensureActiveAgentSegment();
 				if (segment) {
 					this._userSegments.set(event.message, segment);
 				}
-			} else if (inputKind === "follow-up") {
-				this._activeAgentSegment = undefined;
-				const segment = this.sessionManager.allocateSegment("user");
-				if (segment) {
-					this._userSegments.set(event.message, segment);
+			} else if (inputKind === "normal" || inputKind === "follow-up") {
+				if (inputKind === "follow-up" && this._activeAgentSegment) {
+					this._activeAgentSegment = undefined;
+					this._activeAgentSegmentStartedAt = undefined;
+					this._activeAgentSegmentRetryCount = 0;
+				}
+				if (inputKind === "follow-up") {
+					const segment = this.sessionManager.allocateSegment("user");
+					if (segment) {
+						this._userSegments.set(event.message, segment);
+					}
 				}
 				this._agentSegmentPending = true;
+				this._pendingAgentSegmentStartedAt ??= acceptedAt;
 			}
 
 			const messageText = contentText(event.message.content, "");
@@ -746,6 +807,10 @@ export class AgentSession {
 					}
 				}
 			}
+		}
+
+		if (event.type === "message_start" || event.type === "message_update" || event.type === "message_end") {
+			this._prepareProvisionalMessageContext(event.message);
 		}
 
 		// Emit to extensions first
@@ -788,6 +853,7 @@ export class AgentSession {
 				if (event.message.role === "user") {
 					this._userSegments.delete(event.message);
 					this._inputKinds.delete(event.message);
+					this._messageSegmentStartedAt.delete(event.message);
 				}
 			}
 			// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere.
@@ -816,11 +882,6 @@ export class AgentSession {
 					this._retryAttempt = 0;
 				}
 			}
-		}
-
-		if (event.type === "agent_end") {
-			this._activeAgentSegment = undefined;
-			this._agentSegmentPending = false;
 		}
 	};
 
@@ -871,7 +932,7 @@ export class AgentSession {
 	private async _emitExtensionEvent(event: AgentEvent): Promise<void> {
 		if (event.type === "agent_start") {
 			this._turnIndex = 0;
-			await this._extensionRunner.emit({ type: "agent_start" });
+			await this._extensionRunner.emit({ type: "agent_start", ...this._segmentRuntimeEventContext() });
 		} else if (event.type === "agent_end") {
 			await this._extensionRunner.emit({ type: "agent_end", messages: event.messages });
 		} else if (event.type === "turn_start") {
@@ -894,6 +955,7 @@ export class AgentSession {
 			const extensionEvent: MessageStartEvent = {
 				type: "message_start",
 				message: event.message,
+				...this._segmentRuntimeEventContext(event.message),
 			};
 			await this._extensionRunner.emit(extensionEvent);
 		} else if (event.type === "message_update") {
@@ -901,12 +963,14 @@ export class AgentSession {
 				type: "message_update",
 				message: event.message,
 				assistantMessageEvent: event.assistantMessageEvent,
+				...this._segmentRuntimeEventContext(event.message),
 			};
 			await this._extensionRunner.emit(extensionEvent);
 		} else if (event.type === "message_end") {
 			const extensionEvent: MessageEndEvent = {
 				type: "message_end",
 				message: event.message,
+				...this._segmentRuntimeEventContext(event.message),
 			};
 			const replacement = await this._extensionRunner.emitMessageEnd(extensionEvent);
 			if (replacement) {
@@ -1442,6 +1506,8 @@ export class AgentSession {
 		const userMessage = messages.find((message) => message.role === "user");
 		if (userMessage) {
 			this._inputKinds.set(userMessage, "normal");
+			this._agentSegmentPending = true;
+			this._pendingAgentSegmentStartedAt ??= Date.now();
 			const segment = this.sessionManager.allocateSegment("user");
 			if (segment) {
 				this._userSegments.set(userMessage, segment);
@@ -2579,6 +2645,7 @@ export class AgentSession {
 				if (lastMsg?.role === "assistant" && (lastMsg.stopReason === "error" || lastMsg.stopReason === "length")) {
 					this.agent.state.messages = messages.slice(0, -1);
 				}
+				this._activeAgentSegmentRetryCount++;
 				return true;
 			}
 
@@ -3155,6 +3222,7 @@ export class AgentSession {
 			this._retryAbortController = undefined;
 		}
 
+		this._activeAgentSegmentRetryCount++;
 		return true;
 	}
 

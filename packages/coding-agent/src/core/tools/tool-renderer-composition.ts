@@ -3,12 +3,13 @@ import type { AnyToolDefinition, ToolRenderContext, ToolRenderResultOptions } fr
 
 interface RenderLayerState {
 	state: Record<string, unknown>;
+	rowComponent?: Component;
 	callComponent?: Component;
 	resultComponent?: Component;
 }
 
 interface RenderScopeStore {
-	layers: Map<string, RenderLayerState>;
+	layers: WeakMap<object, RenderLayerState>;
 }
 
 const rootRenderState = Symbol("pi.toolRenderRootState");
@@ -21,7 +22,7 @@ type InternalRenderContext = ToolRenderContext & {
 function getRenderScopeStore(rootState: object): RenderScopeStore {
 	let store = renderScopeStores.get(rootState);
 	if (!store) {
-		store = { layers: new Map() };
+		store = { layers: new WeakMap() };
 		renderScopeStores.set(rootState, store);
 	}
 	return store;
@@ -29,8 +30,8 @@ function getRenderScopeStore(rootState: object): RenderScopeStore {
 
 function getScopedRenderContext(
 	context: ToolRenderContext,
-	layerKey: string,
-	slot: "callComponent" | "resultComponent",
+	layerIdentity: object,
+	slot: "rowComponent" | "callComponent" | "resultComponent",
 ): { context: ToolRenderContext; layer: RenderLayerState } {
 	const internalContext = context as InternalRenderContext;
 	const rootState = internalContext[rootRenderState] ?? context.state;
@@ -39,10 +40,10 @@ function getScopedRenderContext(
 	}
 
 	const store = getRenderScopeStore(rootState);
-	let layer = store.layers.get(layerKey);
+	let layer = store.layers.get(layerIdentity);
 	if (!layer) {
 		layer = { state: {} };
-		store.layers.set(layerKey, layer);
+		store.layers.set(layerIdentity, layer);
 	}
 
 	return {
@@ -56,14 +57,28 @@ function getScopedRenderContext(
 	};
 }
 
-export function scopeToolRenderers(definition: AnyToolDefinition, layerKey: string): AnyToolDefinition {
+/**
+ * Give one renderer registration generation its own state and component slots.
+ * Reloaded extensions receive new registration identities, so executable state
+ * from an older generation cannot cross into their renderers.
+ */
+export function scopeToolRenderers(definition: AnyToolDefinition, layerIdentity: object): AnyToolDefinition {
+	const renderRow = definition.renderRow;
 	const renderCall = definition.renderCall;
 	const renderResult = definition.renderResult;
 	return {
 		...definition,
+		renderRow: renderRow
+			? (component, theme, context) => {
+					const scoped = getScopedRenderContext(context, layerIdentity, "rowComponent");
+					const wrapped = renderRow(component, theme, scoped.context);
+					scoped.layer.rowComponent = wrapped;
+					return wrapped;
+				}
+			: undefined,
 		renderCall: renderCall
 			? (args, theme, context) => {
-					const scoped = getScopedRenderContext(context, layerKey, "callComponent");
+					const scoped = getScopedRenderContext(context, layerIdentity, "callComponent");
 					const component = renderCall(args, theme, scoped.context);
 					scoped.layer.callComponent = component;
 					return component;
@@ -71,7 +86,7 @@ export function scopeToolRenderers(definition: AnyToolDefinition, layerKey: stri
 			: undefined,
 		renderResult: renderResult
 			? (result, options: ToolRenderResultOptions, theme, context) => {
-					const scoped = getScopedRenderContext(context, layerKey, "resultComponent");
+					const scoped = getScopedRenderContext(context, layerIdentity, "resultComponent");
 					const component = renderResult(result, options, theme, scoped.context);
 					scoped.layer.resultComponent = component;
 					return component;
@@ -90,6 +105,8 @@ export function inheritToolRenderers(
 	return {
 		...definition,
 		renderShell: definition.renderShell ?? fallback.renderShell,
+		renderSpacing: definition.renderSpacing ?? fallback.renderSpacing,
+		renderRow: definition.renderRow ?? fallback.renderRow,
 		renderCall: definition.renderCall ?? fallback.renderCall,
 		renderResult: definition.renderResult ?? fallback.renderResult,
 	};

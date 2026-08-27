@@ -31,14 +31,14 @@ function invalidTransformResult(toolName: string, reason: string): Error {
 	return new Error(`Tool transform for '${toolName}' ${reason}`);
 }
 
-function applyTransforms(base: RegisteredTool, transforms: RegisteredToolTransform[]): TransformApplicationResult {
-	if (transforms.length === 0) {
-		return { definition: base.definition, transformedBy: [] };
-	}
-
+function applyTransforms(
+	base: RegisteredTool,
+	transforms: RegisteredToolTransform[],
+	baseGeneration: object,
+): TransformApplicationResult {
 	const baseName = base.definition.name;
 	const baseParameters = base.definition.parameters;
-	let current = scopeToolRenderers(base.definition, `${baseName}:base`);
+	let current = scopeToolRenderers(base.definition, baseGeneration);
 	const transformedBy: SourceInfo[] = [];
 
 	for (const registration of transforms) {
@@ -64,7 +64,7 @@ function applyTransforms(base: RegisteredTool, transforms: RegisteredToolTransfo
 				throw invalidTransformResult(baseName, "must return a complete tool definition");
 			}
 
-			current = scopeToolRenderers(transformed, `${baseName}:transform:${registration.registrationOrder}`);
+			current = scopeToolRenderers(transformed, registration);
 			transformedBy.push(registration.sourceInfo);
 		} catch (error) {
 			return {
@@ -113,7 +113,7 @@ export function resolveToolDefinitions(
 			...base,
 			definition: inheritToolRenderers(base.definition, options.rendererFallbacks?.get(name)),
 		};
-		const resolved = applyTransforms(resolvedBase, transformsByName.get(name) ?? []);
+		const resolved = applyTransforms(resolvedBase, transformsByName.get(name) ?? [], base.definition);
 		if (resolved.failure) {
 			failures.push(resolved.failure);
 			continue;

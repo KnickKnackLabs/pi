@@ -141,7 +141,6 @@ import {
 import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.ts";
 import { SessionSelectorComponent } from "./components/session-selector.ts";
 import { SettingsSelectorComponent } from "./components/settings-selector.ts";
-import { SkillInvocationMessageComponent } from "./components/skill-invocation-message.ts";
 import {
 	BranchSummaryStatusIndicator,
 	CompactionStatusIndicator,
@@ -2453,6 +2452,7 @@ export class InteractiveMode {
 			confirm: (title, message, opts) => this.showExtensionConfirm(title, message, opts),
 			input: (title, placeholder, opts) => this.showExtensionInput(title, placeholder, opts),
 			notify: (message, type) => this.showExtensionNotify(message, type),
+			requestRender: () => this.ui.requestRender(),
 			onTerminalInput: (handler) => this.addExtensionTerminalInputListener(handler),
 			setStatus: (key, text) => this.setExtensionStatus(key, text),
 			setWorkingMessage: (message) => {
@@ -3293,20 +3293,30 @@ export class InteractiveMode {
 						this.session.getMessageRenderContext(event.message),
 					);
 					this.streamingComponent.setExpanded(this.toolOutputExpanded);
-					this.streamingMessage = event.message;
+					const assistantMessage = event.message;
+					this.streamingMessage = assistantMessage;
 					this.chatContainer.addChild(this.streamingComponent);
-					this.streamingComponent.updateContent(this.streamingMessage, true);
+					this.streamingComponent.updateContent(assistantMessage, true);
 					this.ui.requestRender();
 				}
 				break;
 
 			case "message_update":
 				if (this.streamingComponent && event.message.role === "assistant") {
-					this.streamingMessage = event.message;
-					this.streamingComponent.updateContent(this.streamingMessage, true);
+					const assistantMessage = event.message;
+					this.streamingMessage = assistantMessage;
+					const renderContext = this.session.getMessageRenderContext(assistantMessage);
+					if (renderContext) {
+						this.streamingComponent.setRenderContext(renderContext);
+					}
+					this.streamingComponent.updateContent(assistantMessage, true);
 
-					for (const content of this.streamingMessage.content) {
+					for (const content of assistantMessage.content) {
 						if (content.type === "toolCall") {
+							if (renderContext) {
+								this.toolCallMessageRenderContexts.set(content.id, renderContext);
+								this.pendingTools.get(content.id)?.setCallMessageRenderContext(renderContext);
+							}
 							if (!this.pendingTools.has(content.id)) {
 								const component = new ToolExecutionComponent(
 									content.name,
@@ -3315,6 +3325,7 @@ export class InteractiveMode {
 									{
 										showImages: this.settingsManager.getShowImages(),
 										imageWidthCells: this.settingsManager.getImageWidthCells(),
+										resolveRowRenderer: () => this.getRegisteredToolDefinition(content.name)?.renderRow,
 									},
 									this.getRegisteredToolDefinition(content.name),
 									this.ui,
@@ -3343,21 +3354,22 @@ export class InteractiveMode {
 					break;
 				}
 				if (this.streamingComponent && event.message.role === "assistant") {
-					this.streamingMessage = event.message;
+					const assistantMessage = event.message;
+					this.streamingMessage = assistantMessage;
 					let errorMessage: string | undefined;
-					if (this.streamingMessage.stopReason === "aborted") {
+					if (assistantMessage.stopReason === "aborted") {
 						const retryAttempt = this.session.retryAttempt;
 						errorMessage =
 							retryAttempt > 0
 								? `Aborted after ${retryAttempt} retry attempt${retryAttempt > 1 ? "s" : ""}`
 								: "Operation aborted";
-						this.streamingMessage.errorMessage = errorMessage;
+						assistantMessage.errorMessage = errorMessage;
 					}
-					this.streamingComponent.updateContent(this.streamingMessage, false);
+					this.streamingComponent.updateContent(assistantMessage, false);
 
-					if (this.streamingMessage.stopReason === "aborted" || this.streamingMessage.stopReason === "error") {
+					if (assistantMessage.stopReason === "aborted" || assistantMessage.stopReason === "error") {
 						if (!errorMessage) {
-							errorMessage = this.streamingMessage.errorMessage || "Error";
+							errorMessage = assistantMessage.errorMessage || "Error";
 						}
 						for (const [, component] of this.pendingTools.entries()) {
 							component.updateResult({
@@ -3371,7 +3383,7 @@ export class InteractiveMode {
 						for (const [, component] of this.pendingTools.entries()) {
 							component.setArgsComplete();
 						}
-						this.maybeShowCacheMissNotice(this.streamingMessage);
+						this.maybeShowCacheMissNotice(assistantMessage);
 					}
 					this.streamingComponent = undefined;
 					this.streamingMessage = undefined;
@@ -3394,6 +3406,7 @@ export class InteractiveMode {
 						{
 							showImages: this.settingsManager.getShowImages(),
 							imageWidthCells: this.settingsManager.getImageWidthCells(),
+							resolveRowRenderer: () => this.getRegisteredToolDefinition(event.toolName)?.renderRow,
 						},
 						this.getRegisteredToolDefinition(event.toolName),
 						this.ui,
@@ -3643,7 +3656,11 @@ export class InteractiveMode {
 
 	private createTurnBoundary(
 		message: Extract<AgentMessage, { role: "user" }>,
-		options?: { source?: InputSource; isReplay?: boolean },
+		options?: {
+			source?: InputSource;
+			isReplay?: boolean;
+			renderContext?: SessionMessageRenderContext;
+		},
 	): Component {
 		const renderBoundary = composeTurnBoundaryRenderer(
 			() => new Spacer(1),
@@ -3652,6 +3669,7 @@ export class InteractiveMode {
 		return renderBoundary(
 			{
 				message,
+				renderContext: options?.renderContext ?? this.session.getMessageRenderContext(message),
 				source: options?.source,
 				isReplay: options?.isReplay ?? false,
 			},
@@ -3720,55 +3738,27 @@ export class InteractiveMode {
 				if (textContent) {
 					if (this.chatContainer.children.length > 0) {
 						const hasRenderedUserMessage = this.chatContainer.children.some(
-							(child) =>
-								child instanceof UserMessageComponent || child instanceof SkillInvocationMessageComponent,
+							(child) => child instanceof UserMessageComponent,
 						);
 						this.chatContainer.addChild(
 							hasRenderedUserMessage ? this.createTurnBoundary(message, options) : new Spacer(1),
 						);
 					}
-					const skillBlock = parseSkillBlock(textContent);
-					if (skillBlock) {
-						// Render skill block (collapsible)
-						const component = new SkillInvocationMessageComponent(
-							skillBlock,
-							this.getMarkdownThemeWithSettings(),
-						);
-						component.setExpanded(this.toolOutputExpanded);
-						this.chatContainer.addChild(component);
-						// Render user message separately if present
-						if (skillBlock.userMessage) {
-							this.chatContainer.addChild(new Spacer(1));
-							const userComponent = new UserMessageComponent(
-								skillBlock.userMessage,
-								this.getMarkdownThemeWithSettings(),
-								this.outputPad,
-								this.getMarkdownTransformers(),
-								this.session.extensionRunner.getBuiltInMessageRendererTransforms("user"),
-								message,
-								options?.renderContext,
-							);
-							userComponent.setExpanded(this.toolOutputExpanded);
-							this.chatContainer.addChild(userComponent);
-							if (options?.isReplay !== true) {
-								this.liveMessageComponents.set(message, userComponent);
-							}
-						}
-					} else {
-						const userComponent = new UserMessageComponent(
-							textContent,
-							this.getMarkdownThemeWithSettings(),
-							this.outputPad,
-							this.getMarkdownTransformers(),
-							this.session.extensionRunner.getBuiltInMessageRendererTransforms("user"),
-							message,
-							options?.renderContext,
-						);
-						userComponent.setExpanded(this.toolOutputExpanded);
-						this.chatContainer.addChild(userComponent);
-						if (options?.isReplay !== true) {
-							this.liveMessageComponents.set(message, userComponent);
-						}
+					const skillBlock = parseSkillBlock(textContent) ?? undefined;
+					const userComponent = new UserMessageComponent(
+						skillBlock?.userMessage ?? (skillBlock ? "" : textContent),
+						this.getMarkdownThemeWithSettings(),
+						this.outputPad,
+						this.getMarkdownTransformers(),
+						this.session.extensionRunner.getBuiltInMessageRendererTransforms("user"),
+						message,
+						options?.renderContext,
+						skillBlock,
+					);
+					userComponent.setExpanded(this.toolOutputExpanded);
+					this.chatContainer.addChild(userComponent);
+					if (options?.isReplay !== true) {
+						this.liveMessageComponents.set(message, userComponent);
 					}
 					if (options?.populateHistory) {
 						this.editor.addToHistory?.(textContent);
@@ -3844,6 +3834,7 @@ export class InteractiveMode {
 							{
 								showImages: this.settingsManager.getShowImages(),
 								imageWidthCells: this.settingsManager.getImageWidthCells(),
+								resolveRowRenderer: () => this.getRegisteredToolDefinition(content.name)?.renderRow,
 							},
 							this.getRegisteredToolDefinition(content.name),
 							this.ui,
@@ -6140,6 +6131,7 @@ export class InteractiveMode {
 
 		try {
 			await this.session.reload({ beforeSessionStart: restoreChatBeforeSessionStart });
+			this.chatContainer.invalidate();
 			restoreChatBeforeSessionStart();
 			this.keybindings.reload();
 			const activeHeader = this.customHeader ?? this.builtInHeader;
