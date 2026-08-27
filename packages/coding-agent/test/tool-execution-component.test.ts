@@ -1,5 +1,5 @@
 import { join, resolve } from "node:path";
-import { Text, type TUI } from "@earendil-works/pi-tui";
+import { resetCapabilitiesCache, setCapabilities, Text, type TUI } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { beforeAll, describe, expect, test } from "vitest";
 import { getReadmePath } from "../src/config.ts";
@@ -7,6 +7,7 @@ import type { RegisteredToolTransform, ToolDefinition, ToolRenderContext } from 
 import { createSyntheticSourceInfo } from "../src/core/source-info.ts";
 import { type BashOperations, createBashToolDefinition } from "../src/core/tools/bash.ts";
 import { createReadTool, createReadToolDefinition } from "../src/core/tools/read.ts";
+import { inheritToolRenderers } from "../src/core/tools/tool-renderer-composition.ts";
 import { resolveToolDefinitions } from "../src/core/tools/tool-resolution.ts";
 import { createWriteToolDefinition } from "../src/core/tools/write.ts";
 import { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
@@ -31,6 +32,9 @@ function createFakeTui(): TUI {
 		requestRender: () => {},
 	} as unknown as TUI;
 }
+
+const TINY_PNG_BASE64 =
+	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==";
 
 describe("ToolExecutionComponent parity", () => {
 	beforeAll(() => {
@@ -168,6 +172,299 @@ describe("ToolExecutionComponent parity", () => {
 		);
 
 		expect(component.render(120)).toEqual([]);
+	});
+
+	test("treats empty self-shell output as whole-tool visibility", () => {
+		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+		try {
+			const hiddenDefinition: ToolDefinition = {
+				...createBaseToolDefinition(),
+				renderShell: "self",
+				renderCall: () => new Text("", 0, 0),
+				renderResult: () => new Text("", 0, 0),
+			};
+			const hidden = new ToolExecutionComponent(
+				"custom_tool",
+				"tool-hidden-image",
+				{},
+				{},
+				hiddenDefinition,
+				createFakeTui(),
+				process.cwd(),
+			);
+			hidden.updateResult(
+				{
+					content: [{ type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" }],
+					details: {},
+					isError: false,
+				},
+				false,
+			);
+			expect(hidden.render(120)).toEqual([]);
+
+			const visibleDefinition: ToolDefinition = {
+				...createBaseToolDefinition(),
+				renderShell: "self",
+				renderCall: () => new Text("visible call", 0, 0),
+				renderResult: () => new Text("visible result", 0, 0),
+			};
+			const visible = new ToolExecutionComponent(
+				"custom_tool",
+				"tool-visible-image",
+				{},
+				{},
+				visibleDefinition,
+				createFakeTui(),
+				process.cwd(),
+			);
+			visible.updateResult(
+				{
+					content: [{ type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" }],
+					details: {},
+					isError: false,
+				},
+				false,
+			);
+			const rendered = visible.render(120).join("\n");
+			expect(stripAnsi(rendered)).toContain("visible call");
+			expect(rendered).toContain("\x1b_G");
+		} finally {
+			resetCapabilitiesCache();
+		}
+	});
+
+	test("lets a row renderer wrap and hide the complete generic fallback", () => {
+		let hidden = false;
+		const toolDefinition: ToolDefinition = {
+			...createBaseToolDefinition("session_tool"),
+			renderRow: (component) => ({
+				render: (width) => (hidden ? [] : ["row wrapper", ...component.render(width)]),
+				invalidate: () => component.invalidate(),
+			}),
+		};
+		const component = new ToolExecutionComponent(
+			"session_tool",
+			"tool-generic-row-wrapper",
+			{},
+			{},
+			toolDefinition,
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.updateResult(
+			{
+				content: [{ type: "text", text: "generic result" }],
+				details: {},
+				isError: false,
+			},
+			false,
+		);
+
+		const expanded = stripAnsi(component.render(120).join("\n"));
+		expect(expanded).toContain("row wrapper");
+		expect(expanded).toContain("session_tool");
+		expect(expanded).toContain("generic result");
+
+		hidden = true;
+		expect(component.render(120)).toEqual([]);
+	});
+
+	test("late-binds only the complete row presentation chain", () => {
+		let currentRowRenderer: ToolDefinition["renderRow"];
+		const lastComponents: unknown[] = [];
+		const toolDefinition: ToolDefinition = {
+			...createBaseToolDefinition("historical_tool"),
+			renderCall: (args) => new Text(`captured call:${String((args as { value: string }).value)}`, 0, 0),
+			renderResult: () => new Text("captured result", 0, 0),
+		};
+		const component = new ToolExecutionComponent(
+			"historical_tool",
+			"tool-late-row",
+			{ value: "original" },
+			{ resolveRowRenderer: () => currentRowRenderer },
+			toolDefinition,
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.updateResult({ content: [{ type: "text", text: "ignored" }], details: {}, isError: false }, false);
+
+		expect(stripAnsi(component.render(120).join("\n"))).toContain("captured call:original");
+
+		currentRowRenderer = (nativeRow, _theme, context) => {
+			lastComponents.push(context.lastComponent);
+			return {
+				render: (width) => ["first row wrapper", ...nativeRow.render(width)],
+				invalidate: () => nativeRow.invalidate(),
+			};
+		};
+		const first = stripAnsi(component.render(120).join("\n"));
+		expect(first).toContain("first row wrapper");
+		expect(first).toContain("captured call:original");
+		expect(first).toContain("captured result");
+		expect(lastComponents.at(-1)).toBeUndefined();
+
+		currentRowRenderer = (nativeRow, _theme, context) => {
+			lastComponents.push(context.lastComponent);
+			return {
+				render: (width) => ["reloaded row wrapper", ...nativeRow.render(width)],
+				invalidate: () => nativeRow.invalidate(),
+			};
+		};
+		const reloaded = stripAnsi(component.render(120).join("\n"));
+		expect(reloaded).toContain("reloaded row wrapper");
+		expect(reloaded).toContain("captured call:original");
+		expect(reloaded).toContain("captured result");
+		expect(lastComponents.at(-1)).toBeUndefined();
+	});
+
+	test("does not share row renderer state or components across extension generations", () => {
+		type Observation = {
+			generation: string;
+			marker: unknown;
+			lastComponent: unknown;
+			returned: { render(width: number): string[]; invalidate(): void };
+		};
+		const observations: Observation[] = [];
+		const baseDefinition = createBaseToolDefinition("generation_tool");
+		const createGeneration = (generation: string): ToolDefinition["renderRow"] => {
+			const transform: RegisteredToolTransform = {
+				name: "generation_tool",
+				registrationOrder: 0,
+				sourceInfo: createSyntheticSourceInfo("<transform:generation-tool>", { source: "test" }),
+				transform(current) {
+					return {
+						...current,
+						renderRow(component, _theme, context) {
+							const marker = context.state.generation;
+							context.state.generation = generation;
+							const returned = {
+								render: (width: number) => [generation, ...component.render(width)],
+								invalidate: () => component.invalidate(),
+							};
+							observations.push({
+								generation,
+								marker,
+								lastComponent: context.lastComponent,
+								returned,
+							});
+							return returned;
+						},
+					};
+				},
+			};
+			return resolveToolDefinitions(
+				[
+					{
+						definition: baseDefinition,
+						sourceInfo: createSyntheticSourceInfo("<base:generation-tool>", { source: "test" }),
+					},
+				],
+				[transform],
+			).definitions.get("generation_tool")!.definition.renderRow;
+		};
+
+		let currentRowRenderer = createGeneration("first");
+		const component = new ToolExecutionComponent(
+			"generation_tool",
+			"tool-generation-row",
+			{},
+			{ resolveRowRenderer: () => currentRowRenderer },
+			baseDefinition,
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.setExpanded(true);
+
+		expect(observations[0]).toMatchObject({ generation: "first", marker: undefined, lastComponent: undefined });
+		expect(observations[1]).toMatchObject({ generation: "first", marker: "first" });
+		expect(observations[1].lastComponent).toBe(observations[0].returned);
+
+		currentRowRenderer = createGeneration("second");
+		expect(stripAnsi(component.render(120).join("\n"))).toContain("second");
+		expect(observations.at(-1)).toMatchObject({
+			generation: "second",
+			marker: undefined,
+			lastComponent: undefined,
+		});
+	});
+
+	test("does not share base row renderer state across replacement tool generations", () => {
+		const markers: unknown[] = [];
+		const createGeneration = (generation: string): ToolDefinition => {
+			const definition: ToolDefinition = {
+				...createBaseToolDefinition("replacement_tool"),
+				renderRow(component, _theme, context) {
+					markers.push(context.state.generation);
+					context.state.generation = generation;
+					return {
+						render: (width) => [generation, ...component.render(width)],
+						invalidate: () => component.invalidate(),
+					};
+				},
+			};
+			return resolveToolDefinitions(
+				[
+					{
+						definition,
+						sourceInfo: createSyntheticSourceInfo("<base:replacement-tool>", { source: "test" }),
+					},
+				],
+				[],
+			).definitions.get("replacement_tool")!.definition;
+		};
+
+		let currentDefinition = createGeneration("first");
+		const component = new ToolExecutionComponent(
+			"replacement_tool",
+			"tool-replacement-row",
+			{},
+			{ resolveRowRenderer: () => currentDefinition.renderRow },
+			currentDefinition,
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.setExpanded(true);
+		expect(markers[0]).toBeUndefined();
+		expect(markers[1]).toBe("first");
+
+		currentDefinition = createGeneration("second");
+		expect(stripAnsi(component.render(120).join("\n"))).toContain("second");
+		expect(markers.at(-1)).toBeUndefined();
+	});
+
+	test("lets a self renderer own its leading spacing", () => {
+		const toolDefinition: ToolDefinition = {
+			...createBaseToolDefinition(),
+			renderShell: "self",
+			renderSpacing: "self",
+			renderCall: () => new Text("custom call", 0, 0),
+		};
+
+		const component = new ToolExecutionComponent(
+			"custom_tool",
+			"tool-self-spacing",
+			{},
+			{},
+			toolDefinition,
+			createFakeTui(),
+			process.cwd(),
+		);
+
+		expect(component.render(120).map((line) => stripAnsi(line).trimEnd())).toEqual(["custom call"]);
+	});
+
+	test("inherits fallback spacing ownership with fallback renderers", () => {
+		const fallback: ToolDefinition = {
+			...createBaseToolDefinition("shared"),
+			renderShell: "self",
+			renderSpacing: "self",
+			renderCall: () => new Text("fallback call", 0, 0),
+		};
+		const inherited = inheritToolRenderers(createBaseToolDefinition("shared"), fallback);
+
+		expect(inherited.renderShell).toBe("self");
+		expect(inherited.renderSpacing).toBe("self");
+		expect(inherited.renderCall).toBe(fallback.renderCall);
 	});
 
 	test("uses built-in rendering for built-in overrides without custom renderers", () => {

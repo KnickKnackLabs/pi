@@ -147,6 +147,9 @@ export interface ExtensionUIContext {
 	/** Show a notification to the user. */
 	notify(message: string, type?: "info" | "warning" | "error"): void;
 
+	/** Request an immediate redraw of the current interactive UI. Optional for host compatibility; no-op outside interactive mode. */
+	requestRender?(): void;
+
 	/** Listen to raw terminal input (interactive mode only). Returns an unsubscribe function. */
 	onTerminalInput(handler: TerminalInputHandler): () => void;
 
@@ -433,9 +436,9 @@ export interface ToolRenderResultOptions {
 
 /** Context passed to tool renderers. */
 export interface ToolRenderContext<TState = any, TArgs = any> {
-	/** Persisted assistant message that owns this tool call. */
+	/** Assistant message that owns this call. Identity is provisional while live and canonical after persistence. */
 	callMessage: SessionMessageRenderContext;
-	/** Persisted tool-result message, once one exists. */
+	/** Tool-result message, once one exists. Identity is provisional while live and canonical after persistence. */
 	resultMessage?: SessionMessageRenderContext;
 	/** Current tool call arguments. Shared across call/result renders for the same tool call. */
 	args: TArgs;
@@ -443,7 +446,7 @@ export interface ToolRenderContext<TState = any, TArgs = any> {
 	toolCallId: string;
 	/** Invalidate just this tool execution component for redraw. */
 	invalidate: () => void;
-	/** Previously returned component for this render slot, if any. */
+	/** Previously returned component for this render slot or whole-row wrapper, if any. */
 	lastComponent: Component | undefined;
 	/** Shared renderer state for this tool row. Initialized by tool-execution.ts. */
 	state: TState;
@@ -481,8 +484,10 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 	parameters: TParams;
 	/** Optional provider-side constrained sampling request for this tool. Set false to explicitly disable it, equivalent to leaving it undefined. */
 	constrainedSampling?: false | ConstrainedSamplingConfig;
-	/** Controls whether ToolExecutionComponent renders the standard colored shell or the tool renders its own framing. */
+	/** Controls whether ToolExecutionComponent renders the standard colored shell or the tool renders its own framing. Empty `self` output suppresses the complete tool row, including auxiliary image output. */
 	renderShell?: "default" | "self";
+	/** `default` lets ToolExecutionComponent add its leading blank row; `self` delegates all leading spacing to the renderer. */
+	renderSpacing?: "default" | "self";
 
 	/** Optional compatibility shim to prepare raw tool call arguments before schema validation. Must return an object conforming to TParams. */
 	prepareArguments?: (args: unknown) => Static<TParams>;
@@ -505,6 +510,13 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 		ctx: ExtensionContext,
 	): Promise<AgentToolResult<TDetails>>;
 
+	/**
+	 * Wrap the complete native tool row after Pi assembles its shell, slot renderers, and auxiliary images.
+	 * Interactive history re-resolves this presentation-only layer after extension reloads without replacing
+	 * the tool execution, schema, result identity, or captured native slot renderers.
+	 */
+	renderRow?: (component: Component, theme: Theme, context: ToolRenderContext<TState, any>) => Component;
+
 	/** Custom rendering for tool call display */
 	renderCall?: (args: Static<TParams>, theme: Theme, context: ToolRenderContext<TState, Static<TParams>>) => Component;
 
@@ -525,7 +537,10 @@ export interface AnyToolDefinition {
 	promptSnippet?: string;
 	promptGuidelines?: string[];
 	parameters: TSchema;
+	/** Empty `self` output suppresses the complete tool row, including auxiliary image output. */
 	renderShell?: "default" | "self";
+	/** `default` lets ToolExecutionComponent add its leading blank row; `self` delegates all leading spacing to the renderer. */
+	renderSpacing?: "default" | "self";
 	prepareArguments?: (args: unknown) => any;
 	executionMode?: ToolExecutionMode;
 	execute(
@@ -535,6 +550,7 @@ export interface AnyToolDefinition {
 		onUpdate: AgentToolUpdateCallback<any> | undefined,
 		ctx: ExtensionContext,
 	): Promise<AgentToolResult<any>>;
+	renderRow?: (component: Component, theme: Theme, context: ToolRenderContext<any, any>) => Component;
 	renderCall?: (args: any, theme: Theme, context: ToolRenderContext<any, any>) => Component;
 	renderResult?: (
 		result: AgentToolResult<any>,
@@ -799,8 +815,18 @@ export interface BeforeAgentStartEvent {
 	systemPromptOptions: BuildSystemPromptOptions;
 }
 
+/** Runtime metadata for a tracked conversation segment. Fields are absent in legacy sessions. */
+export interface SegmentRuntimeEventContext {
+	/** Provisional message identity while live; persisted messages later receive a canonical entryId. */
+	renderContext?: SessionMessageRenderContext;
+	/** Millisecond timestamp when this segment's accepted input entered the active run. */
+	segmentStartedAt?: number;
+	/** Number of automatic retry attempts that actually resumed this Agent segment. */
+	segmentRetryCount?: number;
+}
+
 /** Fired when an agent loop starts */
-export interface AgentStartEvent {
+export interface AgentStartEvent extends SegmentRuntimeEventContext {
 	type: "agent_start";
 }
 
@@ -811,7 +837,7 @@ export interface AgentEndEvent {
 }
 
 /** Fired after an agent run has fully settled and no automatic retry, compaction, or queued continuation will run. */
-export interface AgentSettledEvent {
+export interface AgentSettledEvent extends SegmentRuntimeEventContext {
 	type: "agent_settled";
 }
 
@@ -831,20 +857,20 @@ export interface TurnEndEvent {
 }
 
 /** Fired when a message starts (user, assistant, or toolResult) */
-export interface MessageStartEvent {
+export interface MessageStartEvent extends SegmentRuntimeEventContext {
 	type: "message_start";
 	message: AgentMessage;
 }
 
 /** Fired during assistant message streaming with token-by-token updates */
-export interface MessageUpdateEvent {
+export interface MessageUpdateEvent extends SegmentRuntimeEventContext {
 	type: "message_update";
 	message: AgentMessage;
 	assistantMessageEvent: AssistantMessageEvent;
 }
 
 /** Fired when a message ends */
-export interface MessageEndEvent {
+export interface MessageEndEvent extends SegmentRuntimeEventContext {
 	type: "message_end";
 	message: AgentMessage;
 }
@@ -1246,13 +1272,13 @@ export interface SessionBeforeTreeResult {
 // ============================================================================
 
 export interface SessionMessageRenderContext {
-	/** Canonical persisted session-entry id for the rendered message. */
+	/** Canonical session-entry id after persistence; absent from provisional live context. */
 	readonly entryId?: string;
-	/** Persisted conversation segment number, when the session tracks segments. */
+	/** Persisted or provisionally assigned conversation segment number in tracked sessions. */
 	readonly segmentNumber?: number;
-	/** Persisted conversation segment kind, when the session tracks segments. */
+	/** Persisted or provisionally assigned conversation segment kind in tracked sessions. */
 	readonly segmentKind?: SegmentKind;
-	/** Persisted user-input kind, when the rendered message records one. */
+	/** Persisted or provisional user-input kind, when the rendered message records one. */
 	readonly inputKind?: InputKind;
 }
 
@@ -1315,6 +1341,8 @@ export interface RegisteredBuiltInMessageRendererTransform {
 
 export interface TurnBoundaryContext {
 	message: BuiltInMessageByRole["user"];
+	/** Persisted or provisional segment context for the user message that follows this boundary. */
+	renderContext?: SessionMessageRenderContext;
 	source?: InputSource;
 	isReplay: boolean;
 }

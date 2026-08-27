@@ -1,7 +1,12 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { describe, expect, test, vi } from "vitest";
-import type { InputSource, TurnBoundaryContext } from "../src/core/extensions/types.ts";
+import type {
+	BuiltInMessageRendererTransform,
+	InputSource,
+	SessionMessageRenderContext,
+	TurnBoundaryContext,
+} from "../src/core/extensions/types.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 
@@ -9,14 +14,23 @@ const createTurnBoundary = Reflect.get(InteractiveMode.prototype, "createTurnBou
 const addMessageToChat = Reflect.get(InteractiveMode.prototype, "addMessageToChat") as (
 	this: ReturnType<typeof createFakeMode>,
 	message: AgentMessage,
-	options?: { populateHistory?: boolean; source?: InputSource; isReplay?: boolean },
+	options?: {
+		populateHistory?: boolean;
+		source?: InputSource;
+		isReplay?: boolean;
+		renderContext?: SessionMessageRenderContext;
+	},
 ) => void;
 
 function userMessage(content: string, timestamp: number): AgentMessage {
 	return { role: "user", content, timestamp };
 }
 
-function createFakeMode(contexts: TurnBoundaryContext[] = [], useBoundary = true) {
+function createFakeMode(
+	contexts: TurnBoundaryContext[] = [],
+	useBoundary = true,
+	userTransforms: BuiltInMessageRendererTransform<"user">[] = [],
+) {
 	const transforms = useBoundary
 		? [
 				() => (context: TurnBoundaryContext) => {
@@ -36,9 +50,10 @@ function createFakeMode(contexts: TurnBoundaryContext[] = [], useBoundary = true
 					: (message.content.find((part) => part.type === "text")?.text ?? "")
 				: "",
 		session: {
+			getMessageRenderContext: () => undefined,
 			extensionRunner: {
 				getTurnBoundaryRendererTransforms: () => transforms,
-				getBuiltInMessageRendererTransforms: () => [],
+				getBuiltInMessageRendererTransforms: () => userTransforms,
 			},
 		},
 		getMarkdownThemeWithSettings: () => undefined,
@@ -56,10 +71,23 @@ describe("InteractiveMode turn boundaries", () => {
 		const fakeMode = createFakeMode(contexts);
 
 		addMessageToChat.call(fakeMode, userMessage("first", 1), { source: "interactive", isReplay: false });
-		addMessageToChat.call(fakeMode, userMessage("second", 2), { source: "rpc", isReplay: false });
+		addMessageToChat.call(fakeMode, userMessage("second", 2), {
+			source: "rpc",
+			isReplay: false,
+			renderContext: {
+				segmentNumber: 2,
+				segmentKind: "agent",
+				inputKind: "steer",
+			},
+		});
 
 		expect(contexts).toEqual([
 			expect.objectContaining({
+				renderContext: {
+					segmentNumber: 2,
+					segmentKind: "agent",
+					inputKind: "steer",
+				},
 				source: "rpc",
 				isReplay: false,
 				message: expect.objectContaining({ content: "second" }),
@@ -110,6 +138,29 @@ describe("InteractiveMode turn boundaries", () => {
 			}),
 		]);
 		expect(fakeMode.chatContainer.children[1]?.render(40).map((line) => line.trimEnd())).toEqual(["boundary"]);
-		expect(fakeMode.chatContainer.children.filter((child) => child instanceof Spacer)).toHaveLength(1);
+		expect(fakeMode.chatContainer.children.filter((child) => child instanceof Spacer)).toHaveLength(0);
+		expect(fakeMode.chatContainer.children).toHaveLength(3);
+		const skillSurface = fakeMode.chatContainer.children[2]?.render(80).join("\n") ?? "";
+		expect(skillSurface).toContain("[skill]");
+		expect(skillSurface).toContain("Do this");
+	});
+
+	test("lets one user transform suppress a skill card and its submitted text", () => {
+		initTheme("dark");
+		const suppress: BuiltInMessageRendererTransform<"user"> = () => () => ({
+			component: new Text("", 0, 0),
+			renderShell: "self",
+		});
+		const fakeMode = createFakeMode([], true, [suppress]);
+		const skill = '<skill name="demo" location="/tmp/demo.md">\nSkill body\n</skill>\n\nDo this';
+
+		addMessageToChat.call(fakeMode, userMessage("first", 1));
+		addMessageToChat.call(fakeMode, userMessage(skill, 2), { isReplay: true });
+
+		expect(fakeMode.chatContainer.children).toHaveLength(3);
+		const rendered = fakeMode.chatContainer.render(80).join("\n");
+		expect(rendered).not.toContain("[skill]");
+		expect(rendered).not.toContain("Skill body");
+		expect(rendered).not.toContain("Do this");
 	});
 });

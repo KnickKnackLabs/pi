@@ -62,6 +62,46 @@ describe("AgentSession persisted conversation segments", () => {
 		]);
 	});
 
+	it("allocates the Agent segment before the initial agent_start event", async () => {
+		const starts: Array<{
+			segmentNumber?: number;
+			segmentKind?: string;
+			segmentStartedAt?: number;
+			segmentRetryCount?: number;
+		}> = [];
+		const harness = await createHarness({
+			extensionFactories: [
+				(pi) => {
+					pi.on("agent_start", (event) => {
+						starts.push({
+							segmentNumber: event.renderContext?.segmentNumber,
+							segmentKind: event.renderContext?.segmentKind,
+							segmentStartedAt: event.segmentStartedAt,
+							segmentRetryCount: event.segmentRetryCount,
+						});
+					});
+				},
+			],
+		});
+		harnesses.push(harness);
+		harness.setResponses([fauxAssistantMessage("hello")]);
+
+		await harness.session.prompt("hi");
+
+		expect(starts).toEqual([
+			{
+				segmentNumber: 2,
+				segmentKind: "agent",
+				segmentStartedAt: expect.any(Number),
+				segmentRetryCount: 0,
+			},
+		]);
+		expect(persistedMessages(harness)).toMatchObject([
+			{ segmentNumber: 1, segmentKind: "user", inputKind: "normal", message: { role: "user" } },
+			{ segmentNumber: 2, segmentKind: "agent", message: { role: "assistant" } },
+		]);
+	});
+
 	it("exposes canonical persisted renderer context when public message_end fires", async () => {
 		const harness = await createHarness();
 		harnesses.push(harness);
@@ -119,10 +159,116 @@ describe("AgentSession persisted conversation segments", () => {
 		]);
 	});
 
+	it("keeps automatic retries in one Agent segment and reports only resumed attempts", async () => {
+		const assistantRuntime: Array<{
+			segmentNumber?: number;
+			segmentStartedAt?: number;
+			segmentRetryCount?: number;
+		}> = [];
+		const settledRuntime: Array<{
+			segmentNumber?: number;
+			segmentStartedAt?: number;
+			segmentRetryCount?: number;
+		}> = [];
+		const harness = await createHarness({
+			settings: { retry: { enabled: true, maxRetries: 2, baseDelayMs: 1 } },
+			extensionFactories: [
+				(pi) => {
+					pi.on("message_start", (event) => {
+						if (event.message.role !== "assistant") return;
+						assistantRuntime.push({
+							segmentNumber: event.renderContext?.segmentNumber,
+							segmentStartedAt: event.segmentStartedAt,
+							segmentRetryCount: event.segmentRetryCount,
+						});
+					});
+					pi.on("agent_settled", (event) => {
+						settledRuntime.push({
+							segmentNumber: event.renderContext?.segmentNumber,
+							segmentStartedAt: event.segmentStartedAt,
+							segmentRetryCount: event.segmentRetryCount,
+						});
+					});
+				},
+			],
+		});
+		harnesses.push(harness);
+		harness.setResponses([
+			fauxAssistantMessage("", { stopReason: "error", errorMessage: "overloaded_error" }),
+			fauxAssistantMessage("recovered"),
+		]);
+
+		await harness.session.prompt("retry once");
+
+		expect(
+			persistedMessages(harness)
+				.filter((entry) => entry.message.role === "assistant")
+				.map((entry) => entry.segmentNumber),
+		).toEqual([2, 2]);
+		expect(assistantRuntime).toEqual([
+			{
+				segmentNumber: 2,
+				segmentStartedAt: expect.any(Number),
+				segmentRetryCount: 0,
+			},
+			{
+				segmentNumber: 2,
+				segmentStartedAt: assistantRuntime[0]?.segmentStartedAt,
+				segmentRetryCount: 1,
+			},
+		]);
+		expect(settledRuntime).toEqual([
+			{
+				segmentNumber: 2,
+				segmentStartedAt: assistantRuntime[0]?.segmentStartedAt,
+				segmentRetryCount: 1,
+			},
+		]);
+	});
+
+	it("reports zero retries when a terminal error never resumes", async () => {
+		const settledRetryCounts: Array<number | undefined> = [];
+		const harness = await createHarness({
+			settings: { retry: { enabled: false } },
+			extensionFactories: [
+				(pi) => {
+					pi.on("agent_settled", (event) => {
+						settledRetryCounts.push(event.segmentRetryCount);
+					});
+				},
+			],
+		});
+		harnesses.push(harness);
+		harness.setResponses([fauxAssistantMessage("", { stopReason: "error", errorMessage: "invalid_request_error" })]);
+
+		await harness.session.prompt("do not retry");
+
+		expect(settledRetryCounts).toEqual([0]);
+		expect(
+			persistedMessages(harness)
+				.filter((entry) => entry.message.role === "assistant")
+				.map((entry) => entry.segmentNumber),
+		).toEqual([2]);
+	});
+
 	it("keeps steering input and all assistant and tool entries in the active agent segment", async () => {
 		const waiting = await createWaitingHarness();
 		const { harness, waitForToolStart, releaseTool } = waiting;
 		harnesses.push(harness);
+		const liveUserContexts: Array<{
+			text: string;
+			entryId?: string;
+			segmentNumber?: number;
+			segmentKind?: string;
+			inputKind?: string;
+		}> = [];
+		harness.session.subscribe((event) => {
+			if (event.type !== "message_start" || event.message.role !== "user") return;
+			liveUserContexts.push({
+				text: getMessageText(event.message),
+				...harness.session.getMessageRenderContext(event.message),
+			});
+		});
 		harness.setResponses([
 			fauxAssistantMessage(fauxToolCall("wait", {}), { stopReason: "toolUse" }),
 			fauxAssistantMessage("steering handled"),
@@ -133,6 +279,21 @@ describe("AgentSession persisted conversation segments", () => {
 		await harness.session.steer("change course");
 		releaseTool();
 		await promptPromise;
+
+		expect(liveUserContexts).toEqual([
+			{
+				text: "start",
+				segmentNumber: 1,
+				segmentKind: "user",
+				inputKind: "normal",
+			},
+			{
+				text: "change course",
+				segmentNumber: 2,
+				segmentKind: "agent",
+				inputKind: "steer",
+			},
+		]);
 
 		const entries = persistedMessages(harness);
 		const initialUser = entries.find((entry) => getMessageText(entry.message) === "start");

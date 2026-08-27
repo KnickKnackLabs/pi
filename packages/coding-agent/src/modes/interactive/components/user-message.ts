@@ -1,4 +1,5 @@
-import { Box, Container, Markdown, type MarkdownTheme } from "@earendil-works/pi-tui";
+import { Box, type Component, Container, Markdown, type MarkdownTheme, Spacer } from "@earendil-works/pi-tui";
+import type { ParsedSkillBlock } from "../../../core/agent-session.ts";
 import type {
 	BuiltInMessageByRole,
 	BuiltInMessageRenderer,
@@ -9,6 +10,7 @@ import type {
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { composeBuiltInMessageRenderer } from "./built-in-message-renderer.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";
+import { SkillInvocationMessageComponent } from "./skill-invocation-message.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
 const OSC133_ZONE_END = "\x1b]133;B\x07";
@@ -25,6 +27,7 @@ export class UserMessageComponent extends Container {
 	private renderer: BuiltInMessageRenderer<"user">;
 	private message?: BuiltInMessageByRole["user"];
 	private renderContext: SessionMessageRenderContext;
+	private skillBlock?: ParsedSkillBlock;
 	private expanded = false;
 
 	constructor(
@@ -35,14 +38,19 @@ export class UserMessageComponent extends Container {
 		rendererTransforms: readonly BuiltInMessageRendererTransform<"user">[] = [],
 		message?: BuiltInMessageByRole["user"],
 		renderContext: SessionMessageRenderContext = {},
+		skillBlock?: ParsedSkillBlock,
 	) {
 		super();
 		this.text = text;
 		this.markdownTheme = markdownTheme;
 		this.outputPad = outputPad;
 		this.markdownTransformers = markdownTransformers;
+		this.skillBlock = skillBlock;
 		this.renderer = composeBuiltInMessageRenderer(
-			() => ({ component: this.createFallback(), renderShell: "default" }),
+			() =>
+				this.skillBlock
+					? { component: this.createSkillSurface(), renderShell: "self" }
+					: { component: this.createMessageBody(), renderShell: "default" },
 			rendererTransforms,
 		);
 		this.message = message;
@@ -66,7 +74,7 @@ export class UserMessageComponent extends Container {
 		this.rebuild();
 	}
 
-	private createFallback(): Markdown {
+	private createMessageBody(): Markdown {
 		return new Markdown(
 			this.text,
 			0,
@@ -83,6 +91,20 @@ export class UserMessageComponent extends Container {
 		);
 	}
 
+	private createSkillSurface(): Component {
+		const surface = new Container();
+		const skill = new SkillInvocationMessageComponent(this.skillBlock!, this.markdownTheme);
+		skill.setExpanded(this.expanded);
+		surface.addChild(skill);
+		if (this.text) {
+			surface.addChild(new Spacer(1));
+			const contentBox = new Box(this.outputPad, 1, (content: string) => theme.bg("userMessageBg", content));
+			contentBox.addChild(this.createMessageBody());
+			surface.addChild(contentBox);
+		}
+		return surface;
+	}
+
 	private rebuild(): void {
 		this.clear();
 		const rendered = this.message
@@ -96,7 +118,7 @@ export class UserMessageComponent extends Container {
 					},
 					theme,
 				)
-			: { component: this.createFallback(), renderShell: "default" as const };
+			: { component: this.createMessageBody(), renderShell: "default" as const };
 
 		if (rendered.renderShell === "self") {
 			this.addChild(rendered.component);
