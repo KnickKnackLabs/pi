@@ -777,6 +777,10 @@ export type SessionEvent =
 export interface ContextEvent {
 	type: "context";
 	messages: AgentMessage[];
+	/** Return canonical persisted message identity and segment metadata when this exact source object retains it. */
+	getMessageContext(message: AgentMessage): SessionMessageRenderContext | undefined;
+	/** Runtime metadata for the currently active Agent segment, if this is a tracked session. */
+	activeAgentSegment?: SegmentRuntimeEventContext;
 }
 
 /** Fired before a provider request is sent. Can replace the payload. */
@@ -1881,6 +1885,8 @@ export interface ExtensionActions {
 export interface ExtensionContextActions {
 	getModel: () => Model<any> | undefined;
 	getScopedModels: () => readonly ScopedModel[];
+	getMessageRenderContext?: (message: AgentMessage) => SessionMessageRenderContext | undefined;
+	getActiveAgentSegment?: () => SegmentRuntimeEventContext | undefined;
 	isIdle: () => boolean;
 	isProjectTrusted: () => boolean;
 	getSignal: () => AbortSignal | undefined;

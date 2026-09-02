@@ -356,6 +356,7 @@ export class AgentSession {
 	private _activeAgentSegment: AgentSegmentMetadata | undefined;
 	private _activeAgentSegmentStartedAt: number | undefined;
 	private _activeAgentSegmentRetryCount = 0;
+	private _activeAgentSegmentCompletionEntryId: string | undefined;
 	private _agentSegmentPending = false;
 	private _pendingAgentSegmentStartedAt: number | undefined;
 	private _isAgentRunActive = false;
@@ -440,6 +441,7 @@ export class AgentSession {
 		this._excludedToolNames = config.excludedToolNames ? new Set(config.excludedToolNames) : undefined;
 		this._baseToolsOverride = config.baseToolsOverride;
 		this._sessionStartEvent = config.sessionStartEvent ?? { type: "session_start", reason: "startup" };
+		this._restorePersistedMessageContexts();
 
 		// Always subscribe to agent events for internal handling
 		// (session persistence, extensions, auto-compaction, retry logic)
@@ -468,6 +470,14 @@ export class AgentSession {
 			throw new Error(`Persisted message entry ${entryId} is unavailable`);
 		}
 		this._messageRenderContexts.set(message, sessionMessageEntryToRenderContext(entry));
+	}
+
+	private _restorePersistedMessageContexts(): void {
+		for (const entry of this.sessionManager.buildContextEntries()) {
+			if (entry.type === "message") {
+				this._messageRenderContexts.set(entry.message, sessionMessageEntryToRenderContext(entry));
+			}
+		}
 	}
 
 	private async _getRequiredRequestAuth(model: Model<any>): Promise<{
@@ -664,6 +674,7 @@ export class AgentSession {
 	}
 
 	private async _emitAgentSettled(): Promise<void> {
+		this._persistActiveAgentSegmentCompletion();
 		this._isAgentRunActive = false;
 		const event = { type: "agent_settled" as const, ...this._segmentRuntimeEventContext() };
 		try {
@@ -673,6 +684,7 @@ export class AgentSession {
 			this._activeAgentSegment = undefined;
 			this._activeAgentSegmentStartedAt = undefined;
 			this._activeAgentSegmentRetryCount = 0;
+			this._activeAgentSegmentCompletionEntryId = undefined;
 			this._agentSegmentPending = false;
 			this._pendingAgentSegmentStartedAt = undefined;
 			this._resolveIdleWaitIfIdle();
@@ -692,9 +704,30 @@ export class AgentSession {
 		this._activeAgentSegment = this.sessionManager.allocateSegment("agent");
 		this._activeAgentSegmentStartedAt = this._pendingAgentSegmentStartedAt ?? Date.now();
 		this._activeAgentSegmentRetryCount = 0;
+		this._activeAgentSegmentCompletionEntryId = undefined;
 		this._agentSegmentPending = false;
 		this._pendingAgentSegmentStartedAt = undefined;
 		return this._activeAgentSegment;
+	}
+
+	private _persistActiveAgentSegmentCompletion(): void {
+		const segment = this._activeAgentSegment;
+		const startedAt = this._activeAgentSegmentStartedAt;
+		if (!segment || startedAt === undefined || this._activeAgentSegmentCompletionEntryId) {
+			return;
+		}
+		const entryId = this.sessionManager.appendAgentSegmentCompletion({
+			segmentNumber: segment.segmentNumber,
+			segmentKind: "agent",
+			startedAt,
+			endedAt: Date.now(),
+			retryCount: this._activeAgentSegmentRetryCount,
+		});
+		this._activeAgentSegmentCompletionEntryId = entryId;
+		const entry = this.sessionManager.getEntry(entryId);
+		if (entry) {
+			this._emit({ type: "entry_appended", entry });
+		}
 	}
 
 	private _prepareProvisionalMessageContext(message: AgentMessage): void {
@@ -777,9 +810,11 @@ export class AgentSession {
 				}
 			} else if (inputKind === "normal" || inputKind === "follow-up") {
 				if (inputKind === "follow-up" && this._activeAgentSegment) {
+					this._persistActiveAgentSegmentCompletion();
 					this._activeAgentSegment = undefined;
 					this._activeAgentSegmentStartedAt = undefined;
 					this._activeAgentSegmentRetryCount = 0;
+					this._activeAgentSegmentCompletionEntryId = undefined;
 				}
 				if (inputKind === "follow-up") {
 					const segment = this.sessionManager.allocateSegment("user");
@@ -1582,6 +1617,7 @@ export class AgentSession {
 			return false;
 		}
 
+		this._persistActiveAgentSegmentCompletion();
 		const queued = this._queuedExtensionCommands.splice(0);
 		this._emitQueueUpdate();
 		for (const [index, item] of queued.entries()) {
@@ -2889,6 +2925,11 @@ export class AgentSession {
 			{
 				getModel: () => this.model,
 				getScopedModels: () => this._scopedModels,
+				getMessageRenderContext: (message) => this.getMessageRenderContext(message),
+				getActiveAgentSegment: () => {
+					const context = this._segmentRuntimeEventContext();
+					return context.renderContext?.segmentKind === "agent" ? context : undefined;
+				},
 				isIdle: () => this.isIdle,
 				isProjectTrusted: () => this.settingsManager.isProjectTrusted(),
 				getSignal: () => this.agent.signal,

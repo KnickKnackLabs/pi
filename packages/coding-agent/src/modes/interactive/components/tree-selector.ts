@@ -356,6 +356,7 @@ class TreeList implements Component {
 			let passesFilter = true;
 			// Entry types hidden in default view (settings/bookkeeping)
 			const isSettingsEntry =
+				entry.type === "agent_segment_completion" ||
 				entry.type === "label" ||
 				entry.type === "custom" ||
 				entry.type === "model_change" ||
@@ -593,6 +594,9 @@ class TreeList implements Component {
 			case "branch_summary":
 				parts.push("branch summary", entry.summary);
 				break;
+			case "agent_segment_completion":
+				parts.push("agent segment", String(entry.segmentNumber), "complete");
+				break;
 			case "session_info":
 				parts.push("title");
 				if (entry.name) parts.push(entry.name);
@@ -826,6 +830,9 @@ class TreeList implements Component {
 			}
 			case "branch_summary":
 				result = theme.fg("warning", `[branch summary]: `) + normalize(entry.summary);
+				break;
+			case "agent_segment_completion":
+				result = theme.fg("dim", `[agent segment ${entry.segmentNumber} complete]`);
 				break;
 			case "model_change":
 				result = theme.fg("dim", `[model: ${entry.modelId}]`);

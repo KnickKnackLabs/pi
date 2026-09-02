@@ -170,6 +170,7 @@ function getMessageFromEntry(entry: SessionEntry): AgentMessage | undefined {
 			return createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp);
 
 		// These don't contribute to conversation content
+		case "agent_segment_completion":
 		case "thinking_level_change":
 		case "model_change":
 		case "custom":

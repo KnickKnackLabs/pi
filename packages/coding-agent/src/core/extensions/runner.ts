@@ -56,10 +56,12 @@ import type {
 	ResolvedCommand,
 	ResourcesDiscoverEvent,
 	ResourcesDiscoverResult,
+	SegmentRuntimeEventContext,
 	SessionBeforeCompactResult,
 	SessionBeforeForkResult,
 	SessionBeforeSwitchResult,
 	SessionBeforeTreeResult,
+	SessionMessageRenderContext,
 	SessionShutdownEvent,
 	ToolCallEvent,
 	ToolCallEventResult,
@@ -282,6 +284,9 @@ export class ExtensionRunner {
 	private errorListeners: Set<ExtensionErrorListener> = new Set();
 	private getModel: () => Model<any> | undefined = () => undefined;
 	private getScopedModels: () => readonly ScopedModel[] = () => [];
+	private getMessageRenderContextFn: (message: AgentMessage) => SessionMessageRenderContext | undefined = () =>
+		undefined;
+	private getActiveAgentSegmentFn: () => SegmentRuntimeEventContext | undefined = () => undefined;
 	private isIdleFn: () => boolean = () => true;
 	private isProjectTrustedFn: () => boolean = () => true;
 	private getSignalFn: () => AbortSignal | undefined = () => undefined;
@@ -347,6 +352,8 @@ export class ExtensionRunner {
 		// Context actions (required)
 		this.getModel = contextActions.getModel;
 		this.getScopedModels = contextActions.getScopedModels;
+		this.getMessageRenderContextFn = contextActions.getMessageRenderContext ?? (() => undefined);
+		this.getActiveAgentSegmentFn = contextActions.getActiveAgentSegment ?? (() => undefined);
 		this.isIdleFn = contextActions.isIdle;
 		this.isProjectTrustedFn = contextActions.isProjectTrusted;
 		this.getSignalFn = contextActions.getSignal;
@@ -1027,6 +1034,25 @@ export class ExtensionRunner {
 	async emitContext(messages: AgentMessage[]): Promise<AgentMessage[]> {
 		const ctx = this.createContext();
 		let currentMessages = structuredClone(messages);
+		const messageContexts = new WeakMap<AgentMessage, SessionMessageRenderContext>();
+		for (const [index, sourceMessage] of messages.entries()) {
+			const context = this.getMessageRenderContextFn(sourceMessage);
+			const clonedMessage = currentMessages[index];
+			if (context && clonedMessage) {
+				messageContexts.set(clonedMessage, { ...context });
+			}
+		}
+		const getMessageContext = (message: AgentMessage): SessionMessageRenderContext | undefined => {
+			const context = messageContexts.get(message);
+			return context ? { ...context } : undefined;
+		};
+		const activeContext = this.getActiveAgentSegmentFn();
+		const activeAgentSegment = activeContext
+			? {
+					...activeContext,
+					...(activeContext.renderContext ? { renderContext: { ...activeContext.renderContext } } : {}),
+				}
+			: undefined;
 
 		for (const ext of this.extensions) {
 			const handlers = ext.handlers.get("context");
@@ -1034,7 +1060,12 @@ export class ExtensionRunner {
 
 			for (const handler of handlers) {
 				try {
-					const event: ContextEvent = { type: "context", messages: currentMessages };
+					const event: ContextEvent = {
+						type: "context",
+						messages: currentMessages,
+						getMessageContext,
+						activeAgentSegment,
+					};
 					const handlerResult = await handler(event, ctx);
 
 					if (handlerResult && (handlerResult as ContextEventResult).messages) {
