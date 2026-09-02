@@ -2,7 +2,12 @@ import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import { fauxAssistantMessage, fauxToolCall, type Message } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
-import type { AgentSegmentCompletionEntry, SessionMessageEntry } from "../../src/core/session-manager.ts";
+import type { SessionMessageRenderContext } from "../../src/core/extensions/types.ts";
+import {
+	type AgentSegmentCompletionEntry,
+	SessionManager,
+	type SessionMessageEntry,
+} from "../../src/core/session-manager.ts";
 import { createHarness, getMessageText, type Harness } from "./harness.ts";
 
 function persistedMessages(harness: Harness): SessionMessageEntry[] {
@@ -123,7 +128,7 @@ describe("AgentSession persisted conversation segments", () => {
 			extensionFactories: [
 				(pi) => {
 					pi.registerCommand("observe-completion", {
-						handler: (_args, ctx) => {
+						handler: async (_args, ctx) => {
 							observedAtCommand = ctx.sessionManager
 								.getBranch()
 								.filter(
@@ -292,6 +297,57 @@ describe("AgentSession persisted conversation segments", () => {
 				expect(message.hasContext).toBe(!message.marker);
 			}
 		}
+	});
+
+	it("restores source provenance for persisted context messages", async () => {
+		const sessionManager = SessionManager.inMemory();
+		const priorUserSegment = sessionManager.allocateSegment("user")!;
+		const priorUserId = sessionManager.appendMessage(
+			{ role: "user", content: "prior user", timestamp: 1 },
+			{ segment: priorUserSegment, inputKind: "normal" },
+		);
+		const priorAgentSegment = sessionManager.allocateSegment("agent")!;
+		const priorAssistantId = sessionManager.appendMessage(fauxAssistantMessage("prior assistant"), {
+			segment: priorAgentSegment,
+		});
+		sessionManager.appendAgentSegmentCompletion({
+			segmentNumber: priorAgentSegment.segmentNumber,
+			segmentKind: "agent",
+			startedAt: 2,
+			endedAt: 3,
+			retryCount: 0,
+		});
+		let observed: Array<SessionMessageRenderContext | undefined> = [];
+		const harness = await createHarness({
+			sessionManager,
+			extensionFactories: [
+				(pi) => {
+					pi.on("context", (event) => {
+						observed = event.messages.map((message) => event.getMessageContext(message));
+					});
+				},
+			],
+		});
+		harnesses.push(harness);
+		harness.session.agent.state.messages = sessionManager.buildSessionContext().messages;
+		harness.setResponses([fauxAssistantMessage("next assistant")]);
+
+		await harness.session.prompt("next user");
+
+		expect(observed.slice(0, 2)).toEqual([
+			{
+				entryId: priorUserId,
+				segmentNumber: priorUserSegment.segmentNumber,
+				segmentKind: "user",
+				inputKind: "normal",
+			},
+			{
+				entryId: priorAssistantId,
+				segmentNumber: priorAgentSegment.segmentNumber,
+				segmentKind: "agent",
+			},
+		]);
+		expect(observed[2]).toMatchObject({ segmentNumber: 3, segmentKind: "user", inputKind: "normal" });
 	});
 
 	it("allocates the Agent segment before the initial agent_start event", async () => {

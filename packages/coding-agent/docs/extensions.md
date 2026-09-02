@@ -662,9 +662,22 @@ Fired before each LLM call. Modify messages non-destructively. See [Session Form
 pi.on("context", async (event, ctx) => {
   // event.messages - deep copy, safe to modify
   const filtered = event.messages.filter(m => !shouldPrune(m));
+
+  for (const message of filtered) {
+    // Host-owned entry and segment metadata for this exact source object.
+    // Synthetic or replacement message objects return undefined.
+    const source = event.getMessageContext(message);
+  }
+
+  // Runtime metadata for the active Agent segment in tracked sessions.
+  const activeAgentSegment = event.activeAgentSegment;
   return { messages: filtered };
 });
 ```
+
+`getMessageContext()` uses object identity. Pi transfers host-owned render context to the initial deep-copied source messages and preserves it when later handlers retain those same objects. A handler-created message, or a replacement clone of a source message, has no provenance. The returned metadata is a defensive copy and can include `entryId`, `segmentNumber`, `segmentKind`, and `inputKind`; unavailable or legacy provenance returns `undefined`.
+
+`activeAgentSegment` is a snapshot of the currently active tracked Agent segment, including its provisional render context, fixed start time, and retry count. It is absent when no Agent segment is active or the session is not tracked.
 
 #### before_provider_headers
 
