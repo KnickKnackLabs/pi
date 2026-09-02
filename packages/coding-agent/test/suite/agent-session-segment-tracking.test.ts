@@ -1,12 +1,40 @@
 import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxToolCall, type Message } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
-import type { SessionMessageEntry } from "../../src/core/session-manager.ts";
+import type { SessionMessageRenderContext } from "../../src/core/extensions/types.ts";
+import {
+	type AgentSegmentCompletionEntry,
+	SessionManager,
+	type SessionMessageEntry,
+} from "../../src/core/session-manager.ts";
 import { createHarness, getMessageText, type Harness } from "./harness.ts";
 
 function persistedMessages(harness: Harness): SessionMessageEntry[] {
 	return harness.sessionManager.getEntries().filter((entry): entry is SessionMessageEntry => entry.type === "message");
+}
+
+function segmentCompletions(harness: Harness): AgentSegmentCompletionEntry[] {
+	return harness.sessionManager
+		.getEntries()
+		.filter((entry): entry is AgentSegmentCompletionEntry => entry.type === "agent_segment_completion");
+}
+
+function providerMessageLabel(message: Message): string {
+	if (message.role === "user") {
+		return `user:${getMessageText(message)}`;
+	}
+	if (message.role === "toolResult") {
+		return `toolResult:${message.toolName}:${getMessageText(message)}`;
+	}
+	const content = message.content
+		.map((part) => {
+			if (part.type === "toolCall") return `tool:${part.name}`;
+			if (part.type === "thinking") return `thinking:${part.thinking}`;
+			return part.text;
+		})
+		.join("|");
+	return `assistant:${content}`;
 }
 
 async function createWaitingHarness(): Promise<{
@@ -60,6 +88,266 @@ describe("AgentSession persisted conversation segments", () => {
 			{ segmentNumber: 1, segmentKind: "user", inputKind: "normal", message: { role: "user" } },
 			{ segmentNumber: 2, segmentKind: "agent", message: { role: "assistant" } },
 		]);
+	});
+
+	it("persists completion before agent_settled and emits it once", async () => {
+		const harness = await createHarness();
+		harnesses.push(harness);
+		const order: string[] = [];
+		harness.session.subscribe((event) => {
+			if (event.type === "entry_appended" && event.entry.type === "agent_segment_completion") {
+				order.push("completion");
+			}
+			if (event.type === "agent_settled") {
+				order.push("settled");
+			}
+		});
+		harness.setResponses([fauxAssistantMessage("hello")]);
+
+		await harness.session.prompt("hi");
+
+		expect(order).toEqual(["completion", "settled"]);
+		expect(segmentCompletions(harness)).toEqual([
+			expect.objectContaining({
+				type: "agent_segment_completion",
+				segmentNumber: 2,
+				segmentKind: "agent",
+				startedAt: expect.any(Number),
+				endedAt: expect.any(Number),
+				retryCount: 0,
+			}),
+		]);
+		expect(segmentCompletions(harness)[0]?.endedAt).toBeGreaterThanOrEqual(
+			segmentCompletions(harness)[0]?.startedAt ?? Number.POSITIVE_INFINITY,
+		);
+	});
+
+	it("persists completion before draining a terminal queued command", async () => {
+		let observedAtCommand: AgentSegmentCompletionEntry[] = [];
+		const harness = await createHarness({
+			extensionFactories: [
+				(pi) => {
+					pi.registerCommand("observe-completion", {
+						handler: async (_args, ctx) => {
+							observedAtCommand = ctx.sessionManager
+								.getBranch()
+								.filter(
+									(entry): entry is AgentSegmentCompletionEntry => entry.type === "agent_segment_completion",
+								);
+						},
+					});
+					pi.on("message_end", (event, ctx) => {
+						if (event.message.role === "assistant") {
+							ctx.queueCommand("observe-completion", "", { terminal: true });
+						}
+					});
+				},
+			],
+		});
+		harnesses.push(harness);
+		harness.setResponses([fauxAssistantMessage("hello")]);
+
+		await harness.session.prompt("hi");
+
+		expect(observedAtCommand).toEqual([
+			expect.objectContaining({ segmentNumber: 2, segmentKind: "agent", retryCount: 0 }),
+		]);
+		expect(segmentCompletions(harness)).toHaveLength(1);
+	});
+
+	it("supports stable context-only segment boundaries across tool follow-up and settlement", async () => {
+		const projectedCalls: string[][] = [];
+		const provenanceCalls: Array<Array<{ marker: boolean; hasContext: boolean }>> = [];
+		const activeSegments: Array<number | undefined> = [];
+		const inspectTool: AgentTool = {
+			name: "inspect",
+			label: "Inspect",
+			description: "Return one deterministic proof result",
+			parameters: Type.Object({}),
+			execute: async () => ({
+				content: [{ type: "text", text: "observed" }],
+				details: {},
+			}),
+		};
+		const harness = await createHarness({
+			tools: [inspectTool],
+			extensionFactories: [
+				(pi) => {
+					const marker = (segmentNumber: number, edge: "starts" | "ends"): AgentMessage => ({
+						role: "custom",
+						customType: "segment-boundary-proof",
+						content: `[segment ${segmentNumber} ${edge}]`,
+						display: false,
+						timestamp: segmentNumber,
+					});
+					pi.on("context", (event, ctx) => {
+						const completed = new Set(
+							ctx.sessionManager
+								.getBranch()
+								.filter(
+									(entry): entry is AgentSegmentCompletionEntry => entry.type === "agent_segment_completion",
+								)
+								.map((entry) => entry.segmentNumber),
+						);
+						const projected: AgentMessage[] = [];
+						let openAgentSegment: number | undefined;
+						const closeCompletedAgent = () => {
+							if (openAgentSegment !== undefined && completed.has(openAgentSegment)) {
+								projected.push(marker(openAgentSegment, "ends"));
+								openAgentSegment = undefined;
+							}
+						};
+
+						for (const message of event.messages) {
+							const source = event.getMessageContext(message);
+							if (source?.segmentNumber === undefined || source.segmentKind === undefined) {
+								projected.push(message);
+								continue;
+							}
+							if (source.segmentKind === "user") {
+								closeCompletedAgent();
+								projected.push(
+									marker(source.segmentNumber, "starts"),
+									message,
+									marker(source.segmentNumber, "ends"),
+								);
+								continue;
+							}
+							if (openAgentSegment !== source.segmentNumber) {
+								closeCompletedAgent();
+								openAgentSegment = source.segmentNumber;
+								projected.push(marker(source.segmentNumber, "starts"));
+							}
+							projected.push(message);
+						}
+						closeCompletedAgent();
+
+						const activeSegment = event.activeAgentSegment?.renderContext?.segmentNumber;
+						if (activeSegment !== undefined && activeSegment !== openAgentSegment) {
+							projected.push(marker(activeSegment, "starts"));
+						}
+						return { messages: projected };
+					});
+					pi.on("context", (event) => {
+						provenanceCalls.push(
+							event.messages.map((message) => ({
+								marker: message.role === "custom" && message.customType === "segment-boundary-proof",
+								hasContext: event.getMessageContext(message) !== undefined,
+							})),
+						);
+						activeSegments.push(event.activeAgentSegment?.renderContext?.segmentNumber);
+					});
+				},
+			],
+		});
+		harnesses.push(harness);
+		harness.setResponses([
+			(context) => {
+				projectedCalls.push(context.messages.map(providerMessageLabel));
+				return fauxAssistantMessage(fauxToolCall("inspect", {}, { id: "inspect-1" }), {
+					stopReason: "toolUse",
+				});
+			},
+			(context) => {
+				projectedCalls.push(context.messages.map(providerMessageLabel));
+				return fauxAssistantMessage("first complete");
+			},
+			(context) => {
+				projectedCalls.push(context.messages.map(providerMessageLabel));
+				return fauxAssistantMessage("second complete");
+			},
+		]);
+
+		await harness.session.prompt("first");
+		await harness.session.prompt("second");
+
+		expect(projectedCalls).toEqual([
+			["user:[segment 1 starts]", "user:first", "user:[segment 1 ends]", "user:[segment 2 starts]"],
+			[
+				"user:[segment 1 starts]",
+				"user:first",
+				"user:[segment 1 ends]",
+				"user:[segment 2 starts]",
+				"assistant:tool:inspect",
+				"toolResult:inspect:observed",
+			],
+			[
+				"user:[segment 1 starts]",
+				"user:first",
+				"user:[segment 1 ends]",
+				"user:[segment 2 starts]",
+				"assistant:tool:inspect",
+				"toolResult:inspect:observed",
+				"assistant:first complete",
+				"user:[segment 2 ends]",
+				"user:[segment 3 starts]",
+				"user:second",
+				"user:[segment 3 ends]",
+				"user:[segment 4 starts]",
+			],
+		]);
+		expect(projectedCalls[2]?.slice(0, projectedCalls[1]?.length)).toEqual(projectedCalls[1]);
+		expect(projectedCalls[2]?.slice(projectedCalls[1]?.length, projectedCalls[1]?.length + 2)).toEqual([
+			"assistant:first complete",
+			"user:[segment 2 ends]",
+		]);
+		expect(activeSegments).toEqual([2, 2, 4]);
+		for (const call of provenanceCalls) {
+			for (const message of call) {
+				expect(message.hasContext).toBe(!message.marker);
+			}
+		}
+	});
+
+	it("restores source provenance for persisted context messages", async () => {
+		const sessionManager = SessionManager.inMemory();
+		const priorUserSegment = sessionManager.allocateSegment("user")!;
+		const priorUserId = sessionManager.appendMessage(
+			{ role: "user", content: "prior user", timestamp: 1 },
+			{ segment: priorUserSegment, inputKind: "normal" },
+		);
+		const priorAgentSegment = sessionManager.allocateSegment("agent")!;
+		const priorAssistantId = sessionManager.appendMessage(fauxAssistantMessage("prior assistant"), {
+			segment: priorAgentSegment,
+		});
+		sessionManager.appendAgentSegmentCompletion({
+			segmentNumber: priorAgentSegment.segmentNumber,
+			segmentKind: "agent",
+			startedAt: 2,
+			endedAt: 3,
+			retryCount: 0,
+		});
+		let observed: Array<SessionMessageRenderContext | undefined> = [];
+		const harness = await createHarness({
+			sessionManager,
+			extensionFactories: [
+				(pi) => {
+					pi.on("context", (event) => {
+						observed = event.messages.map((message) => event.getMessageContext(message));
+					});
+				},
+			],
+		});
+		harnesses.push(harness);
+		harness.session.agent.state.messages = sessionManager.buildSessionContext().messages;
+		harness.setResponses([fauxAssistantMessage("next assistant")]);
+
+		await harness.session.prompt("next user");
+
+		expect(observed.slice(0, 2)).toEqual([
+			{
+				entryId: priorUserId,
+				segmentNumber: priorUserSegment.segmentNumber,
+				segmentKind: "user",
+				inputKind: "normal",
+			},
+			{
+				entryId: priorAssistantId,
+				segmentNumber: priorAgentSegment.segmentNumber,
+				segmentKind: "agent",
+			},
+		]);
+		expect(observed[2]).toMatchObject({ segmentNumber: 3, segmentKind: "user", inputKind: "normal" });
 	});
 
 	it("allocates the Agent segment before the initial agent_start event", async () => {
@@ -224,6 +512,7 @@ describe("AgentSession persisted conversation segments", () => {
 				segmentRetryCount: 1,
 			},
 		]);
+		expect(segmentCompletions(harness)).toMatchObject([{ segmentNumber: 2, retryCount: 1 }]);
 	});
 
 	it("reports zero retries when a terminal error never resumes", async () => {
@@ -249,6 +538,7 @@ describe("AgentSession persisted conversation segments", () => {
 				.filter((entry) => entry.message.role === "assistant")
 				.map((entry) => entry.segmentNumber),
 		).toEqual([2]);
+		expect(segmentCompletions(harness)).toMatchObject([{ segmentNumber: 2, retryCount: 0 }]);
 	});
 
 	it("keeps steering input and all assistant and tool entries in the active agent segment", async () => {
@@ -342,6 +632,7 @@ describe("AgentSession persisted conversation segments", () => {
 			segmentNumber: 2,
 			segmentKind: "agent",
 		});
+		expect(segmentCompletions(harness).map((entry) => entry.segmentNumber)).toEqual([2, 4, 6]);
 	});
 
 	it("numbers batched follow-ups individually before one shared agent segment", async () => {
@@ -375,5 +666,6 @@ describe("AgentSession persisted conversation segments", () => {
 			.filter((entry) => entry.message.role === "assistant")
 			.map((entry) => entry.segmentNumber);
 		expect(assistantSegments).toEqual([2, 2, 5]);
+		expect(segmentCompletions(harness).map((entry) => entry.segmentNumber)).toEqual([2, 5]);
 	});
 });

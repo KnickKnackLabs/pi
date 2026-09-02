@@ -6,6 +6,7 @@ import { createInMemoryModelRegistry } from "./model-runtime-test-utils.ts";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { createExtensionRuntime, discoverAndLoadExtensions, loadExtensions } from "../src/core/extensions/loader.ts";
@@ -540,6 +541,65 @@ describe("ExtensionRunner", () => {
 	});
 
 	describe("context creation", () => {
+		it("preserves exact source provenance across chained context handlers", async () => {
+			fs.writeFileSync(
+				path.join(extensionsDir, "context-a.ts"),
+				`export default function (pi) {
+					pi.on("context", (event) => ({
+						messages: [...event.messages, {
+							role: "custom",
+							customType: "synthetic",
+							content: "marker",
+							display: false,
+							timestamp: 2,
+						}],
+					}));
+				}`,
+			);
+			fs.writeFileSync(
+				path.join(extensionsDir, "context-b.ts"),
+				`export default function (pi) {
+					pi.on("context", (event) => {
+						const [source, synthetic] = event.messages;
+						source.content = JSON.stringify({
+							source: event.getMessageContext(source),
+							synthetic: event.getMessageContext(synthetic),
+							active: event.activeAgentSegment,
+						});
+						return { messages: event.messages };
+					});
+				}`,
+			);
+			const source: AgentMessage = { role: "user", content: "hello", timestamp: 1 };
+			const result = await discoverAndLoadExtensions([], tempDir, tempDir);
+			const runner = new ExtensionRunner(result.extensions, result.runtime, tempDir, sessionManager, modelRegistry);
+			runner.bindCore(extensionActions, {
+				...extensionContextActions,
+				getMessageRenderContext: (message) =>
+					message === source
+						? { entryId: "source-entry", segmentNumber: 1, segmentKind: "user", inputKind: "normal" }
+						: undefined,
+				getActiveAgentSegment: () => ({
+					renderContext: { segmentNumber: 2, segmentKind: "agent" },
+					segmentStartedAt: 100,
+					segmentRetryCount: 0,
+				}),
+			});
+
+			const output = await runner.emitContext([source]);
+			expect(output).toHaveLength(2);
+			const observed = output[0]?.role === "user" ? JSON.parse(String(output[0].content)) : undefined;
+			expect(observed).toEqual({
+				source: { entryId: "source-entry", segmentNumber: 1, segmentKind: "user", inputKind: "normal" },
+				active: {
+					renderContext: { segmentNumber: 2, segmentKind: "agent" },
+					segmentStartedAt: 100,
+					segmentRetryCount: 0,
+				},
+			});
+			expect(output[1]).toMatchObject({ role: "custom", customType: "synthetic", content: "marker" });
+		});
+
 		it("exposes the current abort signal on ExtensionContext", async () => {
 			const result = await discoverAndLoadExtensions([], tempDir, tempDir);
 			const runner = new ExtensionRunner(result.extensions, result.runtime, tempDir, sessionManager, modelRegistry);

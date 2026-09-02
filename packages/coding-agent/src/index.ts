@@ -244,6 +244,8 @@ export {
 	type PromptTemplate,
 } from "./core/sdk.ts";
 export {
+	type AgentSegmentCompletion,
+	type AgentSegmentCompletionEntry,
 	type AgentSegmentMetadata,
 	type AppendAtOptions,
 	type AppendMessageOptions,

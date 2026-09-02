@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { BashExecutionMessage, CustomMessage } from "../../src/core/messages.ts";
 import { exportSessionToJsonl } from "../../src/core/session-export.ts";
 import {
+	type AgentSegmentCompletion,
 	type AgentSegmentMetadata,
 	type AppendMessageOptions,
 	SEGMENT_TRACKING_VERSION,
@@ -72,6 +73,84 @@ describe("SessionManager conversation segment tracking", () => {
 			{ segmentNumber: 1, segmentKind: "user", inputKind: "normal", message: { role: "user" } },
 			{ segmentNumber: 2, segmentKind: "agent", message: { role: "assistant" } },
 		]);
+	});
+
+	it("persists validated Agent completion facts outside model context", () => {
+		const session = SessionManager.create(tempDir, sessionsDir, { id: "segment-completion" });
+		const agentSegment = session.allocateSegment("agent")!;
+		const assistantId = session.appendMessage(fauxAssistantMessage("complete"), { segment: agentSegment });
+		const completionId = session.appendAgentSegmentCompletion({
+			segmentNumber: agentSegment.segmentNumber,
+			segmentKind: "agent",
+			startedAt: 100,
+			endedAt: 250,
+			retryCount: 1,
+		});
+
+		expect(session.getEntry(completionId)).toEqual(
+			expect.objectContaining({
+				type: "agent_segment_completion",
+				parentId: assistantId,
+				segmentNumber: 1,
+				segmentKind: "agent",
+				startedAt: 100,
+				endedAt: 250,
+				retryCount: 1,
+			}),
+		);
+		expect(session.buildSessionContext().messages).toHaveLength(1);
+		expect(session.buildSessionContext().messages[0]).toMatchObject({ role: "assistant" });
+
+		const reopened = SessionManager.open(session.getSessionFile()!, sessionsDir);
+		expect(reopened.getEntry(completionId)).toMatchObject({
+			type: "agent_segment_completion",
+			segmentNumber: 1,
+			startedAt: 100,
+			endedAt: 250,
+			retryCount: 1,
+		});
+		expect(reopened.allocateSegment("user")).toEqual({ segmentNumber: 2, segmentKind: "user" });
+	});
+
+	it("validates Agent completion facts and rejects them in legacy sessions", () => {
+		const session = SessionManager.inMemory(tempDir);
+		const invalid = (completion: unknown): AgentSegmentCompletion => completion as AgentSegmentCompletion;
+		const valid = {
+			segmentNumber: 1,
+			segmentKind: "agent" as const,
+			startedAt: 100,
+			endedAt: 200,
+			retryCount: 0,
+		};
+
+		expect(() => session.appendAgentSegmentCompletion(invalid(null))).toThrow(
+			"Agent segment completion must be an object",
+		);
+		expect(() => session.appendAgentSegmentCompletion(invalid({ ...valid, segmentNumber: 0 }))).toThrow(
+			"segmentNumber must be a positive safe integer",
+		);
+		expect(() => session.appendAgentSegmentCompletion(invalid({ ...valid, segmentKind: "user" }))).toThrow(
+			"Agent segment completion requires segmentKind agent",
+		);
+		expect(() => session.appendAgentSegmentCompletion(invalid({ ...valid, endedAt: 99 }))).toThrow(
+			"Agent segment endedAt must be finite and not precede startedAt",
+		);
+		expect(() => session.appendAgentSegmentCompletion(invalid({ ...valid, retryCount: -1 }))).toThrow(
+			"Agent segment retryCount must be a non-negative safe integer",
+		);
+		expect(() => session.appendAgentSegmentCompletion(valid)).toThrow(
+			"Agent segment completion requires an allocated segment",
+		);
+		session.allocateSegment("agent");
+		session.appendAgentSegmentCompletion(valid);
+		expect(() => session.appendAgentSegmentCompletion(valid)).toThrow("Agent segment 1 already has a completion");
+
+		const legacyPath = join(sessionsDir, "legacy-completion.jsonl");
+		writeSession(legacyPath, { tracked: false });
+		const legacy = SessionManager.open(legacyPath, sessionsDir);
+		expect(() => legacy.appendAgentSegmentCompletion(valid)).toThrow(
+			"Agent segment completion requires a tracked session",
+		);
 	});
 
 	it("reconciles supplied numbers with future allocations while allowing repeated segment entries", () => {

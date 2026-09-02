@@ -206,7 +206,7 @@ For sessions with a parent (created via `/fork`, `/clone`, or `newSession({ pare
 ### SessionMessageEntry
 
 A message in the conversation. The `message` field contains an `AgentMessage`.
-Tracked sessions may add `segmentNumber`, `segmentKind`, and, for user input, `inputKind` to message entries only.
+Tracked sessions may add `segmentNumber`, `segmentKind`, and, for user input, `inputKind` to message entries.
 User and agent segments share one positive, monotonically increasing allocation sequence within a session.
 Writers call `allocateSegment()` once when a segment starts, then reuse the returned metadata for every message in that segment.
 The allocator restores the highest number from the entire JSONL file, so rewinding and branching in that file never reuse a persisted number.
@@ -231,6 +231,16 @@ Public append APIs reject invalid combinations and reject segment metadata in an
 {"type":"message","id":"c3d4e5f6","parentId":"b2c3d4e5","timestamp":"2024-12-03T14:00:03.000Z","segmentNumber":2,"segmentKind":"agent","message":{"role":"toolResult","toolCallId":"call_123","toolName":"bash","content":[{"type":"text","text":"output"}],"isError":false}}
 {"type":"message","id":"d4e5f6g7","parentId":"c3d4e5f6","timestamp":"2024-12-03T14:00:04.000Z","segmentNumber":2,"segmentKind":"agent","inputKind":"steer","message":{"role":"user","content":"Change course"}}
 ```
+
+### AgentSegmentCompletionEntry
+
+A durable completion fact for one tracked Agent segment. It records the fixed start and end timestamps plus the number of resumed retry attempts. It does not participate in model context. Pi appends it before `agent_settled`, before starting a delivered follow-up segment, and before draining queued extension commands, so terminal navigation leaves the completion fact on the origin branch.
+
+```json
+{"type":"agent_segment_completion","id":"e5f6g7h8","parentId":"d4e5f6g7","timestamp":"2024-12-03T14:00:05.000Z","segmentNumber":2,"segmentKind":"agent","startedAt":1733234402000,"endedAt":1733234405000,"retryCount":0}
+```
+
+`appendAgentSegmentCompletion()` validates tracked-session mode, positive allocated segment numbers, Agent kind, timestamp order, non-negative retry counts, and one completion per segment.
 
 ### ModelChangeEntry
 
@@ -359,6 +369,7 @@ Entries form a tree:
    - `compaction` -> `compactionSummary` plus `retainedTail` when present
    - `branch_summary` -> `branchSummary`
    - `custom_message` -> `CustomMessage`
+   - `agent_segment_completion` -> no context message
    - `custom` -> no context message
 
 This makes newer compactions act like self-contained checkpoints. `retainedTail` is optional only so older sessions that only store `firstKeptEntryId` continue to load correctly.
@@ -386,6 +397,9 @@ for (const line of lines) {
     case "branch_summary":
       console.log(`[${entry.id}] Branch from ${entry.fromId}`);
       break;
+    case "agent_segment_completion":
+      console.log(`[${entry.id}] Agent segment ${entry.segmentNumber} completed`);
+      break;
     case "custom":
       console.log(`[${entry.id}] Custom (${entry.customType}): ${JSON.stringify(entry.data)}`);
       break;
@@ -409,7 +423,8 @@ for (const line of lines) {
 
 Key methods for working with sessions programmatically.
 The package root exports `SEGMENT_TRACKING_VERSION`, `SegmentKind`, `InputKind`, `SegmentMetadata`,
-`NewSessionOptions`, `AppendMessageOptions`, and `AppendAtOptions` with `SessionManager`.
+`AgentSegmentCompletion`, `AgentSegmentCompletionEntry`, `NewSessionOptions`, `AppendMessageOptions`, and
+`AppendAtOptions` with `SessionManager`.
 
 New sessions created by `create()`, `inMemory()`, or `newSession()` enable segment tracking by default.
 Opening or continuing a session preserves its header, while forks and branched sessions preserve the source tracking mode.

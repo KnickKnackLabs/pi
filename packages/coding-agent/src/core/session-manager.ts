@@ -89,6 +89,19 @@ export interface SessionMessageEntry extends SessionEntryBase {
 	inputKind?: InputKind;
 }
 
+/** Durable completion fact for one tracked Agent segment. Does not participate in model context. */
+export interface AgentSegmentCompletion {
+	segmentNumber: number;
+	segmentKind: "agent";
+	startedAt: number;
+	endedAt: number;
+	retryCount: number;
+}
+
+export interface AgentSegmentCompletionEntry extends SessionEntryBase, AgentSegmentCompletion {
+	type: "agent_segment_completion";
+}
+
 export interface ThinkingLevelChangeEntry extends SessionEntryBase {
 	type: "thinking_level_change";
 	thinkingLevel: string;
@@ -177,6 +190,7 @@ export interface CustomMessageEntry<T = unknown> extends SessionEntryBase {
 /** Session entry - has id/parentId for tree structure (returned by "read" methods in SessionManager) */
 export type SessionEntry =
 	| SessionMessageEntry
+	| AgentSegmentCompletionEntry
 	| ThinkingLevelChangeEntry
 	| ModelChangeEntry
 	| CompactionEntry
@@ -1011,7 +1025,7 @@ export class SessionManager {
 			this.byId.set(entry.id, entry);
 			this.leafId = this._leafIdAfterReplay(entry);
 			if (
-				entry.type === "message" &&
+				(entry.type === "message" || entry.type === "agent_segment_completion") &&
 				typeof entry.segmentNumber === "number" &&
 				Number.isSafeInteger(entry.segmentNumber) &&
 				entry.segmentNumber > highestSegmentNumber
@@ -1119,7 +1133,7 @@ export class SessionManager {
 
 	private _reconcileAppendedSegment(entry: SessionEntry): void {
 		if (
-			entry.type !== "message" ||
+			(entry.type !== "message" && entry.type !== "agent_segment_completion") ||
 			typeof entry.segmentNumber !== "number" ||
 			!Number.isSafeInteger(entry.segmentNumber) ||
 			entry.segmentNumber < this.nextSegmentNumber
@@ -1145,6 +1159,55 @@ export class SessionManager {
 	 */
 	appendMessage(message: Message | CustomMessage | BashExecutionMessage, options: AppendMessageOptions = {}): string {
 		return this.appendMessageAt(this.leafId, message, options);
+	}
+
+	/** Append one validated, non-context completion fact for a tracked Agent segment. */
+	appendAgentSegmentCompletion(completion: AgentSegmentCompletion): string {
+		if (this.getHeader()?.segmentTrackingVersion !== SEGMENT_TRACKING_VERSION) {
+			throw new Error("Agent segment completion requires a tracked session");
+		}
+		if (completion === null || typeof completion !== "object") {
+			throw new Error("Agent segment completion must be an object");
+		}
+		if (!Number.isSafeInteger(completion.segmentNumber) || completion.segmentNumber < 1) {
+			throw new Error("segmentNumber must be a positive safe integer");
+		}
+		if (completion.segmentKind !== "agent") {
+			throw new Error("Agent segment completion requires segmentKind agent");
+		}
+		if (!Number.isFinite(completion.startedAt) || completion.startedAt < 0) {
+			throw new Error("Agent segment startedAt must be a non-negative finite timestamp");
+		}
+		if (!Number.isFinite(completion.endedAt) || completion.endedAt < completion.startedAt) {
+			throw new Error("Agent segment endedAt must be finite and not precede startedAt");
+		}
+		if (!Number.isSafeInteger(completion.retryCount) || completion.retryCount < 0) {
+			throw new Error("Agent segment retryCount must be a non-negative safe integer");
+		}
+		if (completion.segmentNumber >= this.nextSegmentNumber) {
+			throw new Error("Agent segment completion requires an allocated segment");
+		}
+		if (
+			this.fileEntries.some(
+				(entry) => entry.type === "agent_segment_completion" && entry.segmentNumber === completion.segmentNumber,
+			)
+		) {
+			throw new Error(`Agent segment ${completion.segmentNumber} already has a completion`);
+		}
+
+		const entry: AgentSegmentCompletionEntry = {
+			type: "agent_segment_completion",
+			id: generateId(this.byId),
+			parentId: this.leafId,
+			timestamp: new Date().toISOString(),
+			segmentNumber: completion.segmentNumber,
+			segmentKind: "agent",
+			startedAt: completion.startedAt,
+			endedAt: completion.endedAt,
+			retryCount: completion.retryCount,
+		};
+		this._appendEntry(entry);
+		return entry.id;
 	}
 
 	private _validateMessageSegment(
