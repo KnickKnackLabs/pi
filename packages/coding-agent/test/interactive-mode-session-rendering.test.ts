@@ -84,6 +84,7 @@ function createFakeMode() {
 		addCustomEntryToChat: vi.fn(),
 		addCompactionCostNotice: vi.fn(),
 		addCacheMissNotice: vi.fn(),
+		maybeShowAssistantDiagnostics: vi.fn(),
 		footer: { invalidate: vi.fn() },
 		updateEditorBorderColor: vi.fn(),
 	};
@@ -314,6 +315,7 @@ describe("InteractiveMode persisted session rendering", () => {
 			isReplay: true,
 			renderContext: callContext,
 		});
+		expect(fake.maybeShowAssistantDiagnostics).toHaveBeenCalledExactlyOnceWith(assistantMessage);
 		const tool = fake.chatContainer.children.find(
 			(component): component is ToolExecutionComponent => component instanceof ToolExecutionComponent,
 		);

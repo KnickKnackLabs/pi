@@ -47,7 +47,8 @@
 		"node": ">=22.19.0"
 	},
 	"dependencies": {
-		"@earendil-works/pi-ai": "0.83.0-kkl.7",
+		"@earendil-works/chord": "0.83.0-kkl.7",
+		"@earendil-works/pi-agent-core": "0.83.0-kkl.7",
 		"@earendil-works/pi-protocol": "0.83.0-kkl.7"
 	},
 	"devDependencies": {

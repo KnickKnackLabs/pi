@@ -6,6 +6,7 @@ import { CLOUDFLARE_AI_GATEWAY_MODELS } from "./cloudflare-ai-gateway.models.ts"
 import { cloudflareAIGatewayAuth } from "./cloudflare-auth.ts";
 import { cloudflareStreams } from "./cloudflare-stream.ts";
 
+// Capabilities come from the API map, even when the generated catalog omits an API.
 function createCloudflareAIGatewayApi() {
 	return {
 		"anthropic-messages": cloudflareStreams(anthropicMessagesApi()),

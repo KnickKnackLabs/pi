@@ -11,6 +11,7 @@ import { cloudflareAIGatewayProvider } from "../src/providers/cloudflare-ai-gate
 import { cloudflareWorkersAIProvider } from "../src/providers/cloudflare-workers-ai.ts";
 import { fauxAssistantMessage, fauxProvider } from "../src/providers/faux.ts";
 import { googleVertexProvider } from "../src/providers/google-vertex.ts";
+import { openrouterProvider } from "../src/providers/openrouter.ts";
 import type {
 	Api,
 	Context,
@@ -34,6 +35,22 @@ const neverAbortedSignal = new AbortController().signal;
 const context: Context = { messages: [{ role: "user", content: "hi", timestamp: Date.now() }] };
 
 describe("builtin providers", () => {
+	it("declares all gateway and OpenRouter APIs independently of catalog lookups", () => {
+		const gateway = cloudflareAIGatewayProvider();
+		const openrouter = openrouterProvider();
+		gateway.getModels = () => [];
+		openrouter.getModels = () => [];
+
+		for (const provider of [gateway, openrouter]) {
+			expect(provider.supportsApi?.("anthropic-messages")).toBe(true);
+			expect(provider.supportsApi?.("openai-completions")).toBe(true);
+			expect(provider.supportsApi?.("unsupported-api")).toBe(false);
+			expect(provider.supportsApi?.("toString")).toBe(false);
+		}
+		expect(gateway.supportsApi?.("openai-responses")).toBe(true);
+		expect(openrouter.supportsApi?.("openai-responses")).toBe(false);
+	});
+
 	it("builtinModels registers every builtin provider with models", async () => {
 		const models = builtinModels();
 		const providers = models.getProviders();

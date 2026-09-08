@@ -1,5 +1,10 @@
 import { Type } from "typebox";
-import type { ExtensionAPI, NamedToolDefinition, ToolDefinition } from "../src/core/extensions/types.ts";
+import type {
+	AnyToolDefinition,
+	ExtensionAPI,
+	NamedToolDefinition,
+	ToolDefinition,
+} from "../src/core/extensions/types.ts";
 
 const customParameters = Type.Object({ value: Type.String() });
 type CustomTool = NamedToolDefinition<
@@ -9,6 +14,14 @@ type CustomTool = NamedToolDefinition<
 
 // This function is compiled by the repository typecheck and never runs.
 export function checkToolTransformTypes(pi: ExtensionAPI): void {
+	// Erasure may widen callbacks, but must retain every tool property and its sampling policy type.
+	({}) satisfies Record<Exclude<keyof ToolDefinition, keyof AnyToolDefinition>, never>;
+	({}) satisfies Record<Exclude<keyof AnyToolDefinition, keyof ToolDefinition>, never>;
+	pi.registerTool<AnyToolDefinition>("custom_tool", (current) => {
+		current.constrainedSampling satisfies ToolDefinition["constrainedSampling"];
+		return { ...current, constrainedSampling: { type: "json_schema", strict: "require" } };
+	});
+
 	pi.registerTool("read", (current) => ({
 		...current,
 		async execute(toolCallId, params, signal, onUpdate, context) {

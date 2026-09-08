@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import lockfile from "proper-lockfile";
@@ -207,6 +207,183 @@ describe("startup package updates", () => {
 		]);
 		expect(runGit(installedPath, ["rev-parse", "HEAD"])).toBe(originalHead);
 		expect(readFileSync(join(installedPath, "extensions", "index.ts"), "utf-8")).toBe("local work\n");
+	});
+
+	it.each(["dirty", "diverged"] as const)("preserves a %s checkout through resource-loader reload", async (state) => {
+		const declaration = "git:github.com/example/repo@~0.4.0";
+		const fixture = createTaggedGitRemote(join(tempDir, `loader-${state}`));
+		const settings = SettingsManager.inMemory({ packages: [{ source: declaration, update: "startup" }] });
+		const loader = new DefaultResourceLoader({
+			cwd: projectDir,
+			agentDir,
+			settingsManager: settings,
+			noExtensions: true,
+		});
+		const manager = (loader as unknown as { packageManager: DefaultPackageManager }).packageManager;
+		const source = redirectGitSource(manager, declaration, fixture.remote, `example/loader-${state}`);
+		const installedPath = cloneInstalledPackage(manager, source, "user", fixture.remote);
+		const localContent = "export const version = 'local work';\n";
+		writeFileSync(join(installedPath, "extensions", "index.ts"), localContent);
+		if (state === "diverged") {
+			runGit(installedPath, ["config", "user.name", "Pi Test"]);
+			runGit(installedPath, ["config", "user.email", "pi-test@example.com"]);
+			runGit(installedPath, ["add", "extensions/index.ts"]);
+			runGit(installedPath, ["commit", "-m", "local work"]);
+		}
+		const originalHead = runGit(installedPath, ["rev-parse", "HEAD"]);
+		publishGitVersion(fixture.source, "v0.4.1");
+
+		await expect(loader.reload()).rejects.toThrow(
+			"Automatic resolution will not replace startup-managed Git package",
+		);
+
+		expect(loader.getStartupPackageUpdateResults()).toEqual([
+			expect.objectContaining({ source: declaration, scope: "user", status: `refused-${state}` }),
+		]);
+		expect(runGit(installedPath, ["rev-parse", "HEAD"])).toBe(originalHead);
+		expect(readFileSync(join(installedPath, "extensions", "index.ts"), "utf-8")).toBe(localContent);
+	});
+
+	it("honors a refused remote provenance check even when a local tag still matches", async () => {
+		const declaration = "git:github.com/example/repo@~0.4.0";
+		const fixture = createTaggedGitRemote(join(tempDir, "loader-refused-tag"));
+		const settings = SettingsManager.inMemory({ packages: [{ source: declaration, update: "startup" }] });
+		const loader = new DefaultResourceLoader({
+			cwd: projectDir,
+			agentDir,
+			settingsManager: settings,
+			noExtensions: true,
+		});
+		const manager = (loader as unknown as { packageManager: DefaultPackageManager }).packageManager;
+		const source = redirectGitSource(manager, declaration, fixture.remote, "example/loader-refused-tag");
+		const installedPath = cloneInstalledPackage(manager, source, "user", fixture.remote);
+		const originalHead = runGit(installedPath, ["rev-parse", "HEAD"]);
+		publishGitVersion(fixture.source, "v0.4.1");
+		runGit(fixture.source, ["push", "origin", ":refs/tags/v0.4.0"]);
+
+		await expect(loader.reload()).rejects.toThrow("refused-diverged");
+		expect(runGit(installedPath, ["rev-parse", "HEAD"])).toBe(originalHead);
+		expect(runGit(installedPath, ["tag", "--points-at", "HEAD"])).toBe("v0.4.0");
+	});
+
+	it("protects a startup package before updating, including project autoload deltas, but allows manual update", async () => {
+		const declaration = "git:github.com/example/repo@~0.4.0";
+		const fixture = createTaggedGitRemote(join(tempDir, "bootstrap-delta"));
+		const settings = SettingsManager.inMemory({ packages: [{ source: declaration, update: "startup" }] });
+		settings.setProjectPackages([{ source: declaration, autoload: false, extensions: ["extensions/index.ts"] }]);
+		const manager = new DefaultPackageManager({ cwd: projectDir, agentDir, settingsManager: settings });
+		const source = redirectGitSource(manager, declaration, fixture.remote, "example/bootstrap-delta");
+		const installedPath = cloneInstalledPackage(manager, source, "user", fixture.remote);
+		writeFileSync(join(installedPath, "extensions", "index.ts"), "local work\n");
+		const originalHead = runGit(installedPath, ["rev-parse", "HEAD"]);
+		const targetHead = publishGitVersion(fixture.source, "v0.4.1");
+		const onMissing = vi.fn(async () => "install" as const);
+
+		await expect(manager.resolve(onMissing)).rejects.toThrow("Automatic resolution will not replace");
+		expect(onMissing).not.toHaveBeenCalled();
+		expect(runGit(installedPath, ["rev-parse", "HEAD"])).toBe(originalHead);
+		expect(readFileSync(join(installedPath, "extensions", "index.ts"), "utf-8")).toBe("local work\n");
+
+		// Explicit update remains the deliberate reconciliation path, not a resolver retry.
+		settings.setProjectPackages([]);
+		await manager.update(declaration);
+		expect(runGit(installedPath, ["rev-parse", "HEAD"])).toBe(targetHead);
+		expect(readFileSync(join(installedPath, "extensions", "index.ts"), "utf-8")).toContain("0.4.1");
+	});
+
+	it("does not reinstall a locked package during the replacement path gap", async () => {
+		const declaration = "git:github.com/example/repo@~0.4.0";
+		const fixture = createTaggedGitRemote(join(tempDir, "loader-locked"));
+		const settings = SettingsManager.inMemory({ packages: [{ source: declaration, update: "startup" }] });
+		const loader = new DefaultResourceLoader({
+			cwd: projectDir,
+			agentDir,
+			settingsManager: settings,
+			noExtensions: true,
+		});
+		const manager = (loader as unknown as { packageManager: DefaultPackageManager }).packageManager;
+		const source = redirectGitSource(manager, declaration, fixture.remote, "example/loader-locked");
+		const installedPath = cloneInstalledPackage(manager, source, "user", fixture.remote);
+		const originalHead = runGit(installedPath, ["rev-parse", "HEAD"]);
+		const backup = `${installedPath}.test-backup`;
+		const lockTarget = join(dirname(installedPath), `.${basename(installedPath)}.startup-update`);
+		const release = await lockfile.lock(lockTarget, { realpath: false, retries: 0 });
+		const applyStartupUpdates = manager.applyStartupUpdates.bind(manager);
+		vi.spyOn(manager, "applyStartupUpdates").mockImplementation(async () => {
+			const results = await applyStartupUpdates();
+			expect(results[0]?.status).toBe("deferred-locked");
+			// Simulate the other writer moving its own checkout after classification.
+			renameSync(installedPath, backup);
+			return results;
+		});
+		try {
+			await expect(loader.reload()).rejects.toThrow("being updated by another process");
+			expect(existsSync(installedPath)).toBe(false);
+			expect(runGit(backup, ["rev-parse", "HEAD"])).toBe(originalHead);
+		} finally {
+			if (existsSync(backup)) renameSync(backup, installedPath);
+			await release();
+		}
+	});
+
+	it.each([false, true])("does not retry failed preparation through resolution (dirty=%s)", async (dirty) => {
+		const declaration = "git:github.com/example/repo@~0.4.0";
+		const fixture = createTaggedGitRemote(join(tempDir, `loader-failed-${dirty}`));
+		const settings = SettingsManager.inMemory({ packages: [{ source: declaration, update: "startup" }] });
+		const loader = new DefaultResourceLoader({
+			cwd: projectDir,
+			agentDir,
+			settingsManager: settings,
+			noExtensions: true,
+		});
+		const manager = (loader as unknown as { packageManager: DefaultPackageManager }).packageManager;
+		const source = redirectGitSource(manager, declaration, fixture.remote, `example/loader-failed-${dirty}`);
+		const installedPath = cloneInstalledPackage(manager, source, "user", fixture.remote);
+		const originalHead = runGit(installedPath, ["rev-parse", "HEAD"]);
+		publishGitVersion(fixture.source, "v0.4.1");
+		const prepare = vi
+			.spyOn(manager as unknown as PackageManagerInternals, "installGitDependencies")
+			.mockImplementation(async () => {
+				if (dirty) writeFileSync(join(installedPath, "extensions", "index.ts"), "local work\n");
+				throw new Error("preparation failed");
+			});
+
+		if (dirty) await expect(loader.reload()).rejects.toThrow("Automatic resolution will not replace");
+		else await loader.reload();
+
+		expect(loader.getStartupPackageUpdateResults()).toEqual([
+			expect.objectContaining({ status: "failed", phase: "prepare" }),
+		]);
+		expect(prepare).toHaveBeenCalledTimes(1);
+		expect(runGit(installedPath, ["rev-parse", "HEAD"])).toBe(originalHead);
+		expect(readFileSync(join(installedPath, "extensions", "index.ts"), "utf-8")).toBe(
+			dirty ? "local work\n" : "export const version = '0.4.0';\n",
+		);
+	});
+
+	it("installs a missing startup package and resolves successful and fresh updates", async () => {
+		const declaration = "git:github.com/example/repo@~0.4.0";
+		const fixture = createTaggedGitRemote(join(tempDir, "loader-install"));
+		const settings = SettingsManager.inMemory({ packages: [{ source: declaration, update: "startup" }] });
+		const loader = new DefaultResourceLoader({
+			cwd: projectDir,
+			agentDir,
+			settingsManager: settings,
+			noExtensions: true,
+		});
+		const manager = (loader as unknown as { packageManager: DefaultPackageManager }).packageManager;
+		const source = redirectGitSource(manager, declaration, fixture.remote, "example/loader-install");
+		const installedPath = (manager as unknown as PackageManagerInternals).getGitInstallPath(source, "user");
+
+		await loader.reload();
+		expect(loader.getStartupPackageUpdateResults()[0]?.status).toBe("not-installed");
+		const targetHead = publishGitVersion(fixture.source, "v0.4.1");
+		await loader.reload();
+		expect(loader.getStartupPackageUpdateResults()[0]?.status).toBe("updated");
+		expect(runGit(installedPath, ["rev-parse", "HEAD"])).toBe(targetHead);
+		await loader.reload();
+		expect(loader.getStartupPackageUpdateResults()[0]?.status).toBe("skipped-fresh");
+		expect(runGit(installedPath, ["rev-parse", "HEAD"])).toBe(targetHead);
 	});
 
 	it("preserves worktree changes made while the replacement is prepared", async () => {
