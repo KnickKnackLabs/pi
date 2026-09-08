@@ -91,6 +91,7 @@ function createFakeMode() {
 		addCustomEntryToChat: vi.fn(),
 		addCompactionCostNotice: vi.fn(),
 		addCacheMissNotice: vi.fn(),
+		maybeShowAssistantDiagnostics: vi.fn(),
 		footer: { invalidate: vi.fn() },
 		updateEditorBorderColor: vi.fn(),
 	};
@@ -172,7 +173,7 @@ describe("InteractiveMode persisted session rendering", () => {
 
 	test("projects persisted summaries and custom rows through their registered built-in transforms", () => {
 		initTheme("dark");
-		const seen: Array<{ role: string; fromId?: string; options: BuiltInMessageRenderOptions }> = [];
+		const seen: Array<{ role: string; fromId?: string | null; options: BuiltInMessageRenderOptions }> = [];
 		const lookup = vi.fn((role: BuiltInMessageRole): BuiltInMessageRendererTransform<BuiltInMessageRole>[] => [
 			(previous) => (message, options, theme) => {
 				seen.push({
@@ -391,6 +392,7 @@ describe("InteractiveMode persisted session rendering", () => {
 			isReplay: true,
 			renderContext: callContext,
 		});
+		expect(fake.maybeShowAssistantDiagnostics).toHaveBeenCalledExactlyOnceWith(assistantMessage);
 		const tool = fake.chatContainer.children.find(
 			(component): component is ToolExecutionComponent => component instanceof ToolExecutionComponent,
 		);

@@ -530,19 +530,9 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 }
 
 /** Type-erased tool definition used by registries that hold heterogeneous tools. */
-export interface AnyToolDefinition {
-	name: string;
-	label: string;
-	description: string;
-	promptSnippet?: string;
-	promptGuidelines?: string[];
-	parameters: TSchema;
-	/** Empty `self` output suppresses the complete tool row, including auxiliary image output. */
-	renderShell?: "default" | "self";
-	/** `default` lets ToolExecutionComponent add its leading blank row; `self` delegates all leading spacing to the renderer. */
-	renderSpacing?: "default" | "self";
+export interface AnyToolDefinition
+	extends Omit<ToolDefinition, "prepareArguments" | "execute" | "renderRow" | "renderCall" | "renderResult"> {
 	prepareArguments?: (args: unknown) => any;
-	executionMode?: ToolExecutionMode;
 	execute(
 		toolCallId: string,
 		params: any,
@@ -843,6 +833,24 @@ export interface AgentEndEvent {
 /** Fired after an agent run has fully settled and no automatic retry, compaction, or queued continuation will run. */
 export interface AgentSettledEvent extends SegmentRuntimeEventContext {
 	type: "agent_settled";
+}
+
+export type UIPromptKind = "select" | "confirm" | "input" | "editor" | "custom";
+
+/** Fired when Pi starts waiting on a blocking user-facing extension UI prompt. */
+export interface UIPromptStartEvent {
+	type: "ui_prompt_start";
+	reason: "ui_prompt";
+	kind: UIPromptKind;
+	title?: string;
+}
+
+/** Fired when Pi is no longer waiting on a blocking user-facing extension UI prompt. */
+export interface UIPromptEndEvent {
+	type: "ui_prompt_end";
+	reason: "ui_prompt";
+	kind: UIPromptKind;
+	title?: string;
 }
 
 /** Fired at the start of each turn */
@@ -1180,6 +1188,8 @@ export type ExtensionEvent =
 	| AgentStartEvent
 	| AgentEndEvent
 	| AgentSettledEvent
+	| UIPromptStartEvent
+	| UIPromptEndEvent
 	| TurnStartEvent
 	| TurnEndEvent
 	| MessageStartEvent
@@ -1428,6 +1438,8 @@ export interface ExtensionAPI {
 	on(event: "agent_start", handler: ExtensionHandler<AgentStartEvent>): void;
 	on(event: "agent_end", handler: ExtensionHandler<AgentEndEvent>): void;
 	on(event: "agent_settled", handler: ExtensionHandler<AgentSettledEvent>): void;
+	on(event: "ui_prompt_start", handler: ExtensionHandler<UIPromptStartEvent>): void;
+	on(event: "ui_prompt_end", handler: ExtensionHandler<UIPromptEndEvent>): void;
 	on(event: "turn_start", handler: ExtensionHandler<TurnStartEvent>): void;
 	on(event: "turn_end", handler: ExtensionHandler<TurnEndEvent>): void;
 	on(event: "message_start", handler: ExtensionHandler<MessageStartEvent>): void;
@@ -1579,13 +1591,19 @@ export interface ExtensionAPI {
 	// Model and Thinking Level
 	// =========================================================================
 
-	/** Set the current model. Returns false if no API key available. */
+	/**
+	 * Set the model for the current session without changing the configured default for new sessions.
+	 * Returns false if authentication is not configured for the model's provider.
+	 */
 	setModel(model: Model<any>): Promise<boolean>;
 
 	/** Get current thinking level. */
 	getThinkingLevel(): ThinkingLevel;
 
-	/** Set thinking level (clamped to model capabilities). */
+	/**
+	 * Set the thinking level (clamped to model capabilities) for the current session without changing the configured default
+	 * for new sessions.
+	 */
 	setThinkingLevel(level: ThinkingLevel): void;
 
 	// =========================================================================

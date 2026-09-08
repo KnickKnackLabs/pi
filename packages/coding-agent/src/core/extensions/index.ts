@@ -186,6 +186,9 @@ export type {
 	TurnBoundaryRendererTransform,
 	TurnEndEvent,
 	TurnStartEvent,
+	UIPromptEndEvent,
+	UIPromptKind,
+	UIPromptStartEvent,
 	// Events - User Bash
 	UserBashEvent,
 	UserBashEventResult,

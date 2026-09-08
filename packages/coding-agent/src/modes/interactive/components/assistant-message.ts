@@ -1,5 +1,5 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { Container, Markdown, type MarkdownTheme, Spacer, Text } from "@earendil-works/pi-tui";
+import { Container, Markdown, type MarkdownTheme, MouseRegion, Spacer, Text } from "@earendil-works/pi-tui";
 import type {
 	BuiltInMessageRenderer,
 	BuiltInMessageRendererTransform,
@@ -30,6 +30,7 @@ export class AssistantMessageComponent extends Container {
 	private hasToolCalls = false;
 	private isStreaming = false;
 	private expanded = false;
+	private thinkingVisibilityOverrides = new Map<number, boolean>();
 
 	constructor(
 		message?: AssistantMessage,
@@ -82,6 +83,7 @@ export class AssistantMessageComponent extends Container {
 
 	setHideThinkingBlock(hide: boolean): void {
 		this.hideThinkingBlock = hide;
+		this.thinkingVisibilityOverrides.clear();
 		if (this.lastMessage) {
 			this.updateContent(this.lastMessage);
 		}
@@ -153,6 +155,7 @@ export class AssistantMessageComponent extends Container {
 		}
 
 		// Render content in order
+		let thinkingRunIndex = 0;
 		for (let i = 0; i < message.content.length; i++) {
 			const content = message.content[i];
 			if (content.type === "text" && content.text.trim()) {
@@ -191,15 +194,11 @@ export class AssistantMessageComponent extends Container {
 							(nextContent.type === "thinking" && nextContent.thinking.trim()),
 					);
 
-				if (this.hideThinkingBlock) {
-					// Show one static label for each run of thinking blocks when hidden.
-					contentContainer.addChild(
-						new Text(theme.italic(theme.fg("thinkingText", this.hiddenThinkingLabel)), outputPad, 0),
-					);
-				} else {
-					// Render each run of thinking blocks as one Markdown section.
-					contentContainer.addChild(
-						new Markdown(
+				const runIndex = thinkingRunIndex++;
+				const hidden = this.thinkingVisibilityOverrides.get(runIndex) ?? this.hideThinkingBlock;
+				const thinkingComponent = hidden
+					? new Text(theme.italic(theme.fg("thinkingText", this.hiddenThinkingLabel)), outputPad, 0)
+					: new Markdown(
 							thinkingBlocks.join("\n\n"),
 							outputPad,
 							0,
@@ -215,9 +214,15 @@ export class AssistantMessageComponent extends Container {
 									this.markdownTransformers,
 								),
 							},
-						),
-					);
-				}
+						);
+				contentContainer.addChild(
+					new MouseRegion(thinkingComponent, (event) => {
+						if (event.type !== "click" || event.button !== "left") return undefined;
+						this.thinkingVisibilityOverrides.set(runIndex, !hidden);
+						if (this.lastMessage) this.updateContent(this.lastMessage);
+						return { handled: true };
+					}),
+				);
 				if (hasVisibleContentAfter) {
 					contentContainer.addChild(new Spacer(1));
 				}

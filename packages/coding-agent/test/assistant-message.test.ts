@@ -1,5 +1,5 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { Container, Text } from "@earendil-works/pi-tui";
+import { Container, Text, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "vitest";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.ts";
 import { UserMessageComponent } from "../src/modes/interactive/components/user-message.ts";
@@ -90,6 +90,99 @@ describe("AssistantMessageComponent", () => {
 
 		expect(rendered.match(/Thinking\.\.\./g)).toHaveLength(1);
 		expect(rendered).toContain("answer");
+	});
+
+	test("collapses individual thinking runs when clicked", () => {
+		initTheme("dark");
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([
+				{ type: "thinking", thinking: "first reasoning" },
+				{ type: "text", text: "answer" },
+				{ type: "thinking", thinking: "second reasoning" },
+			]),
+		);
+		const width = 80;
+		const lines = component.render(width);
+		const firstThinkingRow = lines.findIndex((line) => stripAnsi(line).includes("first reasoning"));
+		expect(firstThinkingRow).toBeGreaterThanOrEqual(0);
+		const event: TuiMouseEvent = {
+			type: "click",
+			button: "left",
+			x: 1,
+			y: firstThinkingRow,
+			screenX: 1,
+			screenY: firstThinkingRow,
+			width,
+			height: lines.length,
+			shift: false,
+			alt: false,
+			ctrl: false,
+			clickCount: 1,
+		};
+		expect(component.handleMouse(event)?.handled).toBe(true);
+
+		const collapsed = stripAnsi(component.render(width).join("\n"));
+		expect(collapsed).not.toContain("first reasoning");
+		expect(collapsed).toContain("Thinking...");
+		expect(collapsed).toContain("second reasoning");
+	});
+
+	test("keeps clickable thinking inside a transformed message across streaming and persistence", () => {
+		initTheme("dark");
+		const message = createAssistantMessage([{ type: "thinking", thinking: "streamed reasoning" }]);
+		let compositions = 0;
+		const component = new AssistantMessageComponent(
+			undefined,
+			false,
+			undefined,
+			"Thinking...",
+			2,
+			[],
+			[
+				(current) => {
+					compositions++;
+					return (snapshot, options, currentTheme) => {
+						const fallback = current(snapshot, { ...options, outputPad: 0 }, currentTheme);
+						const wrapper = new Container();
+						wrapper.addChild(new Text("wrapper header", 0, 0));
+						wrapper.addChild(fallback.component);
+						return { component: wrapper, renderShell: "self" };
+					};
+				},
+			],
+		);
+		component.updateContent(message, true);
+		const width = 80;
+		const lines = component.render(width).map(stripAnsi);
+		const y = lines.findIndex((line) => line.startsWith("streamed reasoning"));
+		expect(y).toBeGreaterThan(0);
+		expect(
+			component.handleMouse({
+				type: "click",
+				button: "left",
+				x: 0,
+				y,
+				screenX: 0,
+				screenY: y,
+				width,
+				height: lines.length,
+				shift: false,
+				alt: false,
+				ctrl: false,
+				clickCount: 1,
+			})?.handled,
+		).toBe(true);
+		component.setRenderContext({ entryId: "saved", segmentKind: "agent", segmentNumber: 2 });
+		component.updateContent(message, false);
+		component.setExpanded(true);
+		component.invalidate();
+		const collapsed = component.render(width).map(stripAnsi);
+		expect(collapsed.some((line) => line.startsWith("Thinking..."))).toBe(true);
+		expect(collapsed.join("\n")).not.toContain("streamed reasoning");
+		expect(collapsed.join("\n")).toContain("wrapper header");
+		expect(compositions).toBe(1);
+		component.setHideThinkingBlock(false);
+		expect(stripAnsi(component.render(width).join("\n"))).toContain("streamed reasoning");
 	});
 
 	test("uses configured output padding for text and thinking", () => {

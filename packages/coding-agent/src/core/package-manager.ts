@@ -123,7 +123,10 @@ export interface ConfiguredPackage {
 }
 
 export interface PackageManager {
-	resolve(onMissing?: (source: string) => Promise<MissingSourceAction>): Promise<ResolvedPaths>;
+	resolve(
+		onMissing?: (source: string) => Promise<MissingSourceAction>,
+		options?: { startupUpdates?: readonly StartupPackageUpdateResult[] },
+	): Promise<ResolvedPaths>;
 	applyStartupUpdates(): Promise<StartupPackageUpdateResult[]>;
 	install(source: string, options?: { local?: boolean }): Promise<void>;
 	installAndPersist(source: string, options?: { local?: boolean }): Promise<void>;
@@ -943,12 +946,15 @@ export class DefaultPackageManager implements PackageManager {
 		return this.dedupePackages(allPackages);
 	}
 
-	async resolve(onMissing?: (source: string) => Promise<MissingSourceAction>): Promise<ResolvedPaths> {
+	async resolve(
+		onMissing?: (source: string) => Promise<MissingSourceAction>,
+		options?: { startupUpdates?: readonly StartupPackageUpdateResult[] },
+	): Promise<ResolvedPaths> {
 		const accumulator = this.createAccumulator();
 		const globalSettings = this.settingsManager.getGlobalSettings();
 		const projectSettings = this.settingsManager.getProjectSettings();
 		const packageSources = this.getEffectivePackageSources();
-		await this.resolvePackageSources(packageSources, accumulator, onMissing);
+		await this.resolvePackageSources(packageSources, accumulator, onMissing, options?.startupUpdates);
 
 		const globalBaseDir = this.agentDir;
 		const projectBaseDir = join(this.cwd, CONFIG_DIR_NAME);
@@ -1309,6 +1315,7 @@ export class DefaultPackageManager implements PackageManager {
 		sources: Array<{ pkg: PackageSource; scope: SourceScope }>,
 		accumulator: ResourceAccumulator,
 		onMissing?: (source: string) => Promise<MissingSourceAction>,
+		startupUpdates: readonly StartupPackageUpdateResult[] = [],
 	): Promise<void> {
 		for (const { pkg, scope } of sources) {
 			const sourceStr = typeof pkg === "string" ? pkg : pkg.source;
@@ -1354,11 +1361,40 @@ export class DefaultPackageManager implements PackageManager {
 
 			if (parsed.type === "git") {
 				const installedPath = this.getGitInstallPath(parsed, resolvedScope);
+				const startupUpdate = startupUpdates.find(
+					(result) => result.source === resolvedSource && result.scope === resolvedScope,
+				);
+				if (startupUpdate?.status === "deferred-locked") {
+					throw new Error(
+						`Startup package is being updated by another process: ${resolvedSource} (${installedPath})`,
+					);
+				}
+				const refusedUpdate =
+					startupUpdate?.status === "refused-dirty" || startupUpdate?.status === "refused-diverged";
+				const installedExists = existsSync(installedPath);
 				const needsInstall =
-					!existsSync(installedPath) ||
+					!installedExists ||
 					((parsed.pinned || parsed.range !== undefined) &&
 						!(await this.installedGitMatchesConfiguredSource(parsed, installedPath)));
-				if (needsInstall) {
+				if (needsInstall || refusedUpdate) {
+					const effectivePackage = deltaBase
+						? sources.find(
+								(entry) =>
+									entry.scope === resolvedScope && this.getPackageSourceString(entry.pkg) === resolvedSource,
+							)?.pkg
+						: pkg;
+					const startupManaged =
+						parsed.range && typeof effectivePackage === "object" && effectivePackage.update === "startup";
+					// Resolution is not a second updater. Preserve refusals/failures even if the
+					// checkout disappeared, and protect existing work during the pre-trust load too.
+					const preserveAttempt =
+						startupUpdate &&
+						!["not-installed", "skipped-ineligible", "skipped-offline"].includes(startupUpdate.status);
+					if (preserveAttempt || (installedExists && startupManaged)) {
+						throw new Error(
+							`Automatic resolution will not replace startup-managed Git package ${resolvedSource} (${installedPath}): ${startupUpdate?.status ?? "checkout does not match the configured range"}. Preserve local work and resolve the checkout manually before reloading.`,
+						);
+					}
 					const installed = await installMissing();
 					if (!installed) continue;
 				} else if (resolvedScope === "temporary" && !parsed.pinned && !isOfflineModeEnabled()) {
