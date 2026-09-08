@@ -17,12 +17,13 @@ import { allowNetwork } from "./test-network-env.ts";
 
 // Helper to run git commands in a directory
 function git(args: string[], cwd: string): string {
-	const result = spawnSync("git", args, {
+	const result = spawnSync("git", ["-c", "commit.gpgSign=false", "-c", "tag.gpgSign=false", ...args], {
 		cwd,
 		encoding: "utf-8",
+		timeout: 10_000,
 	});
 	if (result.status !== 0) {
-		throw new Error(`Command failed: git ${args.join(" ")}\n${result.stderr}`);
+		throw new Error(`Command failed: git ${args.join(" ")}\n${result.error?.message ?? result.stderr}`);
 	}
 	return result.stdout.trim();
 }

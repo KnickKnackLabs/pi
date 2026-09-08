@@ -55,6 +55,7 @@ type RenderSessionContextThis = {
 	isInitialized: boolean;
 	updateEditorBorderColor(): void;
 	getRegisteredToolDefinition(toolName: string): undefined;
+	maybeShowAssistantDiagnostics(message: AssistantMessage): void;
 	addMessageToChat(message: AgentMessage, options?: { populateHistory?: boolean }): void;
 	applyPersistedMessageRenderContext(message: AgentMessage): void;
 	renderSessionItems: RenderSessionItems;
@@ -96,6 +97,7 @@ function createFakeInteractiveModeThis(): RenderSessionContextThis {
 				applyPersistedMessageRenderContext(message: AgentMessage): void;
 			}
 		).applyPersistedMessageRenderContext,
+		maybeShowAssistantDiagnostics: vi.fn(),
 		renderSessionItems: (InteractiveMode.prototype as unknown as { renderSessionItems: RenderSessionItems })
 			.renderSessionItems,
 		addMessageToChat(message: AgentMessage) {

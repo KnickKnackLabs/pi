@@ -132,6 +132,51 @@ describe("AgentSession tool transforms", () => {
 		session.dispose();
 	});
 
+	it("preserves sampling through presentation transforms and refreshes an explicit opt-out", async () => {
+		let disableSampling: (() => void) | undefined;
+		const session = await createSession({
+			extensionFactories: [
+				(pi) => {
+					pi.registerTool("read", (current) => ({
+						...current,
+						renderSpacing: "self",
+						renderRow: (component) => component,
+					}));
+					disableSampling = () => {
+						pi.registerTool<AnyToolDefinition>("read", (current) => ({
+							...current,
+							constrainedSampling: false,
+						}));
+					};
+				},
+			],
+		});
+		try {
+			const original = session.getToolDefinition("read")!;
+			expect(original.constrainedSampling).toEqual({ type: "json_schema", strict: "prefer" });
+			expect(session.agent.state.tools.find((tool) => tool.name === "read")?.constrainedSampling).toEqual(
+				original.constrainedSampling,
+			);
+
+			disableSampling!();
+			const optedOut = session.getToolDefinition("read")!;
+			expect(optedOut.constrainedSampling).toBe(false);
+			expect(session.agent.state.tools.find((tool) => tool.name === "read")?.constrainedSampling).toBe(false);
+			expect(optedOut.parameters).toBe(original.parameters);
+			expect(optedOut.execute).toBe(original.execute);
+			expect(optedOut.renderSpacing).toBe("self");
+			expect(optedOut.renderRow).toBeTypeOf("function");
+
+			await session.reload();
+			expect(session.getToolDefinition("read")?.constrainedSampling).toEqual(original.constrainedSampling);
+			expect(session.agent.state.tools.find((tool) => tool.name === "read")?.constrainedSampling).toEqual(
+				original.constrainedSampling,
+			);
+		} finally {
+			session.dispose();
+		}
+	});
+
 	it("composes transforms across extensions in registration order", async () => {
 		const session = await createSession({
 			extensionFactories: [

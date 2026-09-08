@@ -1,5 +1,12 @@
 import { join, resolve } from "node:path";
-import { resetCapabilitiesCache, setCapabilities, Text, type TUI } from "@earendil-works/pi-tui";
+import {
+	Container,
+	resetCapabilitiesCache,
+	setCapabilities,
+	Text,
+	type TUI,
+	type TuiMouseEvent,
+} from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { beforeAll, describe, expect, test } from "vitest";
 import { getReadmePath } from "../src/config.ts";
@@ -7,6 +14,7 @@ import type { RegisteredToolTransform, ToolDefinition, ToolRenderContext } from 
 import { createSyntheticSourceInfo } from "../src/core/source-info.ts";
 import { type BashOperations, createBashToolDefinition } from "../src/core/tools/bash.ts";
 import { createReadTool, createReadToolDefinition } from "../src/core/tools/read.ts";
+import { withBuiltInRenderers } from "../src/core/tools/renderers/index.ts";
 import { inheritToolRenderers } from "../src/core/tools/tool-renderer-composition.ts";
 import { resolveToolDefinitions } from "../src/core/tools/tool-resolution.ts";
 import { createWriteToolDefinition } from "../src/core/tools/write.ts";
@@ -31,6 +39,23 @@ function createFakeTui(): TUI {
 	return {
 		requestRender: () => {},
 	} as unknown as TUI;
+}
+
+function leftClick(y: number, height: number, width = 120): TuiMouseEvent {
+	return {
+		type: "click",
+		button: "left",
+		x: 2,
+		y,
+		screenX: 2,
+		screenY: y,
+		width,
+		height,
+		shift: false,
+		alt: false,
+		ctrl: false,
+		clickCount: 1,
+	};
 }
 
 const TINY_PNG_BASE64 =
@@ -477,7 +502,7 @@ describe("ToolExecutionComponent parity", () => {
 			"tool-2",
 			{ path: "README.md", oldText: "before", newText: "after" },
 			{},
-			overrideDefinition,
+			withBuiltInRenderers("edit", overrideDefinition),
 			createFakeTui(),
 			process.cwd(),
 		);
@@ -586,7 +611,7 @@ describe("ToolExecutionComponent parity", () => {
 			"tool-4b",
 			{ path: "notes.txt" },
 			{},
-			overrideDefinition,
+			withBuiltInRenderers("read", overrideDefinition),
 			createFakeTui(),
 			process.cwd(),
 		);
@@ -608,7 +633,7 @@ describe("ToolExecutionComponent parity", () => {
 			"tool-4c",
 			{ path: "README.md" },
 			{},
-			overrideDefinition,
+			withBuiltInRenderers("read", overrideDefinition),
 			createFakeTui(),
 			process.cwd(),
 		);
@@ -949,6 +974,96 @@ describe("ToolExecutionComponent parity", () => {
 		const rendered = component.render(120).join("\n");
 		expect(stripAnsi(rendered)).toContain(error);
 		expect(rendered).toContain(theme.fg("toolOutput", error));
+	});
+
+	test("expands a collapsed tool result when clicked", () => {
+		const component = new ToolExecutionComponent(
+			"read",
+			"tool-click-expand",
+			{ path: "notes.txt" },
+			{},
+			createReadToolDefinition(process.cwd()),
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.updateResult(
+			{ content: [{ type: "text", text: "hidden content" }], details: undefined, isError: false },
+			false,
+		);
+		const width = 120;
+		const lines = component.render(width);
+		const resultRow = lines.findIndex((line) => stripAnsi(line).includes("notes.txt"));
+		expect(resultRow).toBeGreaterThanOrEqual(0);
+		const event = leftClick(resultRow, lines.length, width);
+		expect(component.handleMouse(event)?.handled).toBe(true);
+		expect(stripAnsi(component.render(width).join("\n"))).toContain("hidden content");
+	});
+
+	for (const renderShell of ["default", "self"] as const) {
+		for (const renderSpacing of ["default", "self"] as const) {
+			test(`routes clicks through the displayed row wrapper (${renderShell} shell, ${renderSpacing} spacing)`, () => {
+				const definition: ToolDefinition = {
+					...createBaseToolDefinition(),
+					renderShell,
+					renderSpacing,
+					renderCall: () => new Text("click target", 0, 0),
+					renderResult: (_result, options) =>
+						new Text(options.expanded ? "expanded result" : "folded result", 0, 0),
+					renderRow: (nativeRow) => {
+						const wrapper = new Container();
+						wrapper.addChild(new Text("row header", 0, 0));
+						wrapper.addChild(nativeRow);
+						return wrapper;
+					},
+				};
+				const component = new ToolExecutionComponent(
+					"custom_tool",
+					"mouse-wrapped",
+					{},
+					{},
+					definition,
+					createFakeTui(),
+					process.cwd(),
+				);
+				component.updateResult({ content: [], isError: false }, false);
+				const lines = component.render(120);
+				expect(component.handleMouse(leftClick(0, lines.length))).toBeUndefined();
+				const y = lines.findIndex((line) => stripAnsi(line).includes("click target"));
+				expect(y).toBeGreaterThan(0);
+				expect(component.handleMouse(leftClick(y, lines.length))?.handled).toBe(true);
+				expect(stripAnsi(component.render(120).join("\n"))).toContain("expanded result");
+			});
+		}
+	}
+
+	test("does not click through a replacement row without mouse handling", () => {
+		let replaced = true;
+		const definition: ToolDefinition = {
+			...createBaseToolDefinition(),
+			renderShell: "self",
+			renderSpacing: "self",
+			renderCall: () => new Text("native target", 0, 0),
+			renderResult: (_result, options) => new Text(options.expanded ? "expanded result" : "folded result", 0, 0),
+		};
+		const component = new ToolExecutionComponent(
+			"custom_tool",
+			"mouse-replaced",
+			{},
+			{
+				resolveRowRenderer: () => (replaced ? () => new Text("collapsed row", 0, 0) : undefined),
+			},
+			definition,
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.updateResult({ content: [], isError: false }, false);
+		const lines = component.render(120);
+		expect(stripAnsi(lines.join("\n"))).toContain("collapsed row");
+		expect(component.handleMouse(leftClick(0, lines.length))).toBeUndefined();
+		replaced = false;
+		const restored = stripAnsi(component.render(120).join("\n"));
+		expect(restored).toContain("folded result");
+		expect(restored).not.toContain("expanded result");
 	});
 
 	test("collapses ordinary read results until expanded", () => {
