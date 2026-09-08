@@ -1,8 +1,13 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
-import { Container, type TUI } from "@earendil-works/pi-tui";
+import { Container, Text, type TUI } from "@earendil-works/pi-tui";
 import { describe, expect, test, vi } from "vitest";
-import type { SessionMessageRenderContext } from "../src/core/extensions/types.ts";
+import type {
+	BuiltInMessageRendererTransform,
+	BuiltInMessageRenderOptions,
+	BuiltInMessageRole,
+	SessionMessageRenderContext,
+} from "../src/core/extensions/types.ts";
 import type { CustomMessageEntry, SessionEntry } from "../src/core/session-manager.ts";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.ts";
 import { CustomMessageComponent } from "../src/modes/interactive/components/custom-message.ts";
@@ -46,7 +51,9 @@ function createMessageMode() {
 		session: {
 			extensionRunner: {
 				getMessageRenderer: () => undefined,
-				getBuiltInMessageRendererTransforms: () => [],
+				getBuiltInMessageRendererTransforms: (
+					_role: BuiltInMessageRole,
+				): BuiltInMessageRendererTransform<BuiltInMessageRole>[] => [],
 				getTurnBoundaryRendererTransforms: () => [],
 			},
 		},
@@ -162,6 +169,76 @@ describe("InteractiveMode persisted session rendering", () => {
 			expect.objectContaining({ entryId: "custom-entry" }),
 			expect.anything(),
 		);
+	});
+
+	test("projects persisted summaries and custom rows through their registered built-in transforms", () => {
+		initTheme("dark");
+		const seen: Array<{ role: string; fromId?: string | null; options: BuiltInMessageRenderOptions }> = [];
+		const lookup = vi.fn((role: BuiltInMessageRole): BuiltInMessageRendererTransform<BuiltInMessageRole>[] => [
+			(previous) => (message, options, theme) => {
+				seen.push({
+					role: message.role,
+					fromId: message.role === "branchSummary" ? message.fromId : undefined,
+					options,
+				});
+				const native = previous(message, options, theme);
+				const row = new Container();
+				row.addChild(new Text(`hook:${role}:${options.entryId}`, 0, 0));
+				row.addChild(native.component);
+				return { component: row, renderShell: "self" };
+			},
+		]);
+		const entries: SessionEntry[] = [
+			{
+				type: "branch_summary",
+				id: "canonical-summary",
+				parentId: null,
+				timestamp: "2026-09-08T00:00:00.000Z",
+				fromId: "abandoned-leaf",
+				summary: "Preserved branch context",
+			},
+			{
+				type: "custom_message",
+				id: "canonical-custom",
+				parentId: "canonical-summary",
+				timestamp: "2026-09-08T00:00:01.000Z",
+				customType: "notice",
+				content: "Preserved custom content",
+				display: true,
+			},
+		];
+		const fake = Object.assign(createFakeMode(), createMessageMode(), { renderSessionItems: vi.fn() });
+		fake.session.extensionRunner.getBuiltInMessageRendererTransforms = lookup;
+		fake.addMessageToChat.mockImplementation((message, options) => {
+			addMessageToChat.call(fake, message, options);
+		});
+		fake.renderSessionItems.mockImplementation((items, options) => {
+			renderSessionItems.call(fake, items, options);
+		});
+
+		// Exercise entry projection, role lookup and real component construction;
+		// never inject canonical IDs or transforms directly into components here.
+		renderSessionEntries.call(fake, entries);
+
+		expect(lookup.mock.calls).toEqual([["branchSummary"], ["custom"]]);
+		for (const [role, entryId] of [
+			["branchSummary", "canonical-summary"],
+			["custom", "canonical-custom"],
+		]) {
+			const observations = seen.filter((item) => item.role === role);
+			expect(observations.length).toBeGreaterThan(0);
+			for (const observation of observations) {
+				expect(observation.options).toStrictEqual({ entryId, expanded: false, outputPad: 1, isStreaming: false });
+				if (role === "branchSummary") {
+					expect(observation.fromId).toBe("abandoned-leaf");
+					expect(observation.options.entryId).not.toBe(observation.fromId);
+				}
+			}
+		}
+		const lines = fake.chatContainer.render(100).join("\n");
+		expect(lines).toContain("hook:branchSummary:canonical-summary");
+		expect(lines).toContain("hook:custom:canonical-custom");
+		expect(lines).toContain("Preserved custom content");
 	});
 
 	test("forwards replay context into user, assistant, and custom message components", () => {

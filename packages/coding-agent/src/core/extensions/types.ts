@@ -1320,11 +1320,13 @@ export type MessageRenderer<T = unknown> = (
 	theme: Theme,
 ) => Component | undefined;
 
-export type BuiltInMessageRole = "user" | "assistant";
+export type BuiltInMessageRole = "user" | "assistant" | "branchSummary" | "custom";
 
 export interface BuiltInMessageByRole {
 	user: Extract<AgentMessage, { role: "user" }>;
 	assistant: Extract<AgentMessage, { role: "assistant" }>;
+	branchSummary: Extract<AgentMessage, { role: "branchSummary" }>;
+	custom: CustomMessage;
 }
 
 export interface BuiltInMessageRenderOptions extends MessageRenderOptions {
@@ -1511,7 +1513,12 @@ export interface ExtensionAPI {
 	/** Register a custom renderer for CustomMessageEntry. */
 	registerMessageRenderer<T = unknown>(customType: string, renderer: MessageRenderer<T>): void;
 
-	/** Wrap Pi's built-in renderer for user or assistant transcript messages. */
+	/**
+	 * Wrap a native transcript message renderer. For branchSummary and custom, the
+	 * delegated result includes the complete native row, including leading spacing
+	 * and any registered custom renderer. Return renderShell: "self" to own or hide
+	 * that complete row; "default" applies the native message box and spacing.
+	 */
 	registerBuiltInMessageRenderer<Role extends BuiltInMessageRole>(
 		role: Role,
 		transform: BuiltInMessageRendererTransform<Role>,
