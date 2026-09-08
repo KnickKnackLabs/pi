@@ -1674,7 +1674,7 @@ Register a custom TUI renderer for custom messages with your `customType`. Custo
 
 ### pi.registerBuiltInMessageRenderer(role, transform)
 
-Wrap Pi's configured transcript renderer for built-in `"user"` or `"assistant"` messages. The transform receives the current renderer and returns another synchronous renderer. Several transforms compose in extension load order, with later transforms wrapping earlier ones.
+Wrap Pi's configured transcript renderer for `"user"`, `"assistant"`, `"branchSummary"`, or `"custom"` messages. The transform receives the current renderer and returns another synchronous renderer. Several transforms compose in extension load order, with later transforms wrapping earlier ones.
 
 Each renderer receives the complete message, the current theme, and `{ expanded, outputPad, isStreaming, entryId, segmentNumber, segmentKind, inputKind }`. Segment fields are available only for tracked sessions. Live messages receive provisional segment fields before persistence; `entryId` appears only after the message has a canonical session entry. The message is an isolated snapshot, so mutations affect only the current render chain and cannot change the session or model context. Calling the current renderer preserves Pi's native Markdown, thinking, error, and extension-transform behavior:
 
@@ -1691,6 +1691,10 @@ pi.registerBuiltInMessageRenderer("assistant", (current) => {
 Return `{ component, renderShell: "default" }` to keep Pi's role-specific visual shell, or `renderShell: "self"` when the returned component owns its card background and padding. Pi retains the transcript-level lifecycle and terminal integration in either mode.
 
 The hook is display-only. It does not modify persisted messages or model context. Pi invokes it for new, streaming, restored, and expansion-toggled transcript content; the returned component receives normal `render(width)` calls when the terminal resizes. Keep renderers synchronous and inexpensive. If a transform throws or returns an invalid result, Pi falls back to the previous renderer layer.
+
+For `"branchSummary"` and `"custom"`, the delegated result is the **complete native row**, including its leading spacer, background and any registered custom message renderer. Its shell is `"self"`. Returning an empty component with `renderShell: "self"` suppresses the entire row, with no leftover spacer. `"default"` instead wraps your content in the standard custom-message box and leading spacer. Branch-summary options carry the canonical summary entry's `entryId`, not its `fromId`; they do not invent segment membership. Custom rows receive their canonical ID after persistence. These roles use `isStreaming: false`.
+
+A transform factory is created once per transcript component and retained through context, expansion and theme updates. Reload or transcript reconstruction creates fresh factories. A returned component may resolve shared display state inside `render(width)` when later rows change it; request a redraw through `ctx.ui.requestRender()` as needed. This does not change stored content or establish semantic relationships between entries.
 
 See [built-in-message-renderer.ts](../examples/extensions/built-in-message-renderer.ts) for a complete wrapping example.
 
@@ -3003,7 +3007,7 @@ See [tui.md](tui.md) Pattern 7 for a complete example with mode indicator.
 
 ### Message and Entry Rendering
 
-Use `pi.registerBuiltInMessageRenderer()` to wrap the native user or assistant transcript component without changing the message stored in the session or sent to the model. The current renderer can be delegated to, padded differently, or placed inside a component-owned card. See [built-in-message-renderer.ts](../examples/extensions/built-in-message-renderer.ts).
+Use `pi.registerBuiltInMessageRenderer()` to wrap native user, assistant, branch-summary or custom-message transcript components without changing the message stored in the session or sent to the model. The current renderer can be delegated to, padded differently, or placed inside a component-owned card. See [built-in-message-renderer.ts](../examples/extensions/built-in-message-renderer.ts).
 
 Use `pi.registerTurnBoundaryRenderer()` to replace or wrap the blank spacer before each user turn after the first. See [turn-boundary-renderer.ts](../examples/extensions/turn-boundary-renderer.ts).
 

@@ -3710,6 +3710,7 @@ export class InteractiveMode {
 						this.getMarkdownThemeWithSettings(),
 						this.outputPad,
 						options?.renderContext,
+						this.session.extensionRunner.getBuiltInMessageRendererTransforms("custom"),
 					);
 					component.setExpanded(this.toolOutputExpanded);
 					this.chatContainer.addChild(component);
@@ -3727,8 +3728,13 @@ export class InteractiveMode {
 				break;
 			}
 			case "branchSummary": {
-				this.chatContainer.addChild(new Spacer(1));
-				const component = new BranchSummaryMessageComponent(message, this.getMarkdownThemeWithSettings());
+				const component = new BranchSummaryMessageComponent(
+					message,
+					this.getMarkdownThemeWithSettings(),
+					this.session.extensionRunner.getBuiltInMessageRendererTransforms("branchSummary"),
+					options?.renderContext,
+					this.outputPad,
+				);
 				component.setExpanded(this.toolOutputExpanded);
 				this.chatContainer.addChild(component);
 				break;
@@ -3906,7 +3912,9 @@ export class InteractiveMode {
 			const renderContext =
 				entry.type === "message" || entry.type === "custom_message"
 					? sessionMessageEntryToRenderContext(entry)
-					: {};
+					: entry.type === "branch_summary"
+						? { entryId: entry.id }
+						: {};
 			const messages = sessionEntryToContextMessages(entry).map(
 				(message): RenderSessionMessageItem => ({ type: "session_message", message, renderContext }),
 			);
@@ -4867,6 +4875,7 @@ export class InteractiveMode {
 								if (
 									child instanceof AssistantMessageComponent ||
 									child instanceof CustomMessageComponent ||
+									child instanceof BranchSummaryMessageComponent ||
 									child instanceof UserMessageComponent
 								) {
 									child.setOutputPad(padding);
