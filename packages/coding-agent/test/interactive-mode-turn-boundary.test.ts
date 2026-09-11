@@ -6,6 +6,7 @@ import type {
 	InputSource,
 	SessionMessageRenderContext,
 	TurnBoundaryContext,
+	TurnBoundaryRendererTransform,
 } from "../src/core/extensions/types.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
@@ -31,7 +32,7 @@ function createFakeMode(
 	useBoundary = true,
 	userTransforms: BuiltInMessageRendererTransform<"user">[] = [],
 ) {
-	const transforms = useBoundary
+	const transforms: TurnBoundaryRendererTransform[] = useBoundary
 		? [
 				() => (context: TurnBoundaryContext) => {
 					contexts.push(context);
@@ -50,7 +51,7 @@ function createFakeMode(
 					: (message.content.find((part) => part.type === "text")?.text ?? "")
 				: "",
 		session: {
-			getMessageRenderContext: () => undefined,
+			getMessageRenderContext: (_message: AgentMessage): SessionMessageRenderContext | undefined => undefined,
 			extensionRunner: {
 				getTurnBoundaryRendererTransforms: () => transforms,
 				getBuiltInMessageRendererTransforms: () => userTransforms,
@@ -65,6 +66,65 @@ function createFakeMode(
 }
 
 describe("InteractiveMode turn boundaries", () => {
+	test("promotes a live boundary with its user card without relying on cloned message identity", () => {
+		initTheme("dark");
+		const snapshots: object[] = [];
+		const packed = new Set<string>();
+		const boundaryFactory = vi.fn();
+		const userTransform: BuiltInMessageRendererTransform<"user"> = (previous) => (message, options, theme) => {
+			snapshots.push(message);
+			const native = previous(message, options, theme);
+			return {
+				component: {
+					render: (width) =>
+						options.entryId && packed.has(options.entryId) ? [] : native.component.render(width),
+					invalidate() {},
+				},
+				renderShell: "self",
+			};
+		};
+		const fakeMode = createFakeMode([], true, [userTransform]);
+		fakeMode.session.extensionRunner.getTurnBoundaryRendererTransforms = () => [
+			(previous) => {
+				boundaryFactory();
+				return (context, theme) => {
+					snapshots.push(context.message);
+					const native = previous(context, theme);
+					return {
+						render: (width) =>
+							context.renderContext?.entryId && packed.has(context.renderContext.entryId)
+								? []
+								: native.render(width),
+						invalidate() {},
+					};
+				};
+			},
+		];
+		const first = userMessage("same text", 1);
+		const live = userMessage("same text", 1);
+		const provisional: SessionMessageRenderContext = { segmentNumber: 3, segmentKind: "user", inputKind: "normal" };
+		addMessageToChat.call(fakeMode, first, { isReplay: true, renderContext: { entryId: "first" } });
+		addMessageToChat.call(fakeMode, live, { renderContext: provisional, isReplay: false });
+		const boundary = fakeMode.chatContainer.children[1]!;
+		const card = fakeMode.chatContainer.children[2]!;
+		expect(boundary.render(40)).toEqual([""]);
+		expect(snapshots.every((snapshot) => snapshot !== first && snapshot !== live)).toBe(true);
+		expect(new Set(snapshots).size).toBe(snapshots.length);
+
+		const persisted = { ...provisional, entryId: "saved" };
+		fakeMode.session.getMessageRenderContext = (message) => (message === live ? persisted : undefined);
+		Reflect.get(InteractiveMode.prototype, "applyPersistedMessageRenderContext").call(fakeMode, live);
+		packed.add("saved");
+		expect(boundary.render(40)).toEqual([]);
+		expect(card.render(40)).toEqual([]);
+		expect(fakeMode.chatContainer.children[0]!.render(40).join("\n")).toContain("same text");
+		expect(boundaryFactory).toHaveBeenCalledTimes(1);
+		expect(fakeMode.liveMessageComponents.has(live)).toBe(false);
+		packed.clear();
+		expect(boundary.render(40)).toEqual([""]);
+		expect(card.render(40).join("\n")).toContain("same text");
+	});
+
 	test("keeps the first message boundary-free and passes live context to later boundaries", () => {
 		initTheme("dark");
 		const contexts: TurnBoundaryContext[] = [];
@@ -105,7 +165,7 @@ describe("InteractiveMode turn boundaries", () => {
 		addMessageToChat.call(fakeMode, userMessage("second", 2));
 
 		expect(fakeMode.chatContainer.children).toHaveLength(3);
-		expect(fakeMode.chatContainer.children[1]).toBeInstanceOf(Spacer);
+		expect(fakeMode.chatContainer.children[1]?.render(40)).toEqual([""]);
 	});
 
 	test("does not invoke the boundary hook for the first user message after non-user content", () => {

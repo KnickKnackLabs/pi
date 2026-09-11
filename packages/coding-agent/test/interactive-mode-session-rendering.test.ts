@@ -72,7 +72,7 @@ function createFakeMode() {
 	return {
 		pendingTools: new Map<string, ToolExecutionComponent>(),
 		toolCallMessageRenderContexts: new Map<string, SessionMessageRenderContext>(),
-		liveMessageComponents: new WeakMap<AgentMessage, UserMessageComponent | CustomMessageComponent>(),
+		liveMessageComponents: new WeakMap<AgentMessage, { component: UserMessageComponent | CustomMessageComponent }>(),
 		settingsManager: {
 			getShowCacheMissNotices: () => false,
 			getShowImages: () => false,
@@ -276,7 +276,10 @@ describe("InteractiveMode persisted session rendering", () => {
 	test("tracks live user and custom components until their entries are persisted", () => {
 		initTheme("dark");
 		const fake = Object.assign(createMessageMode(), {
-			liveMessageComponents: new WeakMap<AgentMessage, UserMessageComponent | CustomMessageComponent>(),
+			liveMessageComponents: new WeakMap<
+				AgentMessage,
+				{ component: UserMessageComponent | CustomMessageComponent }
+			>(),
 		});
 		const userMessage: AgentMessage = { role: "user", content: "live", timestamp: 1 };
 		const customMessage: AgentMessage = {
@@ -290,8 +293,8 @@ describe("InteractiveMode persisted session rendering", () => {
 		addMessageToChat.call(fake, userMessage, { isReplay: false });
 		addMessageToChat.call(fake, customMessage, { isReplay: false });
 
-		expect(fake.liveMessageComponents.get(userMessage)).toBeInstanceOf(UserMessageComponent);
-		expect(fake.liveMessageComponents.get(customMessage)).toBeInstanceOf(CustomMessageComponent);
+		expect(fake.liveMessageComponents.get(userMessage)?.component).toBeInstanceOf(UserMessageComponent);
+		expect(fake.liveMessageComponents.get(customMessage)?.component).toBeInstanceOf(CustomMessageComponent);
 	});
 
 	test("applies persisted context to live messages and separate tool call/result slots", () => {
@@ -330,10 +333,12 @@ describe("InteractiveMode persisted session rendering", () => {
 		};
 		const fake = {
 			session: { getMessageRenderContext: (message: AgentMessage) => contexts.get(message) },
-			liveMessageComponents: new WeakMap<AgentMessage, typeof userComponent | typeof customComponent>([
-				[userMessage, userComponent],
-				[customMessage, customComponent],
-			]),
+			liveMessageComponents: new WeakMap<AgentMessage, { component: typeof userComponent | typeof customComponent }>(
+				[
+					[userMessage, { component: userComponent }],
+					[customMessage, { component: customComponent }],
+				],
+			),
 			streamingComponent: assistantComponent,
 			pendingTools: new Map([["tool-live", toolComponent]]),
 			toolCallMessageRenderContexts: new Map<string, SessionMessageRenderContext>(),
