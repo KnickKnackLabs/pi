@@ -248,6 +248,16 @@ export interface OverlayOptions {
 	visible?: (termWidth: number, termHeight: number) => boolean;
 	/** If true, don't capture keyboard focus when shown */
 	nonCapturing?: boolean;
+
+	/**
+	 * Fullscreen only: handle a press outside this overlay's rendered bounds.
+	 * The topmost eligible overlay is offered the press before underlying content.
+	 * Coordinates are overlay-local and may be outside its width/height.
+	 * Return handled to consume the entire gesture, even if the handler hides the
+	 * overlay. Returning undefined or handled: false preserves normal dispatch.
+	 * Handled presses request a render unless render is false.
+	 */
+	onOutsideMouse?: (event: TuiMouseEvent) => Pick<TuiMouseEventResult, "handled" | "render"> | undefined;
 }
 
 /** Options for {@link OverlayHandle.unfocus}. */
@@ -820,31 +830,43 @@ export abstract class TuiBase extends Container implements TUI {
 		return component;
 	}
 
-	/** Dispatch to the visually topmost overlay under the pointer. */
-	protected dispatchMouseToOverlay(event: TuiMouseEvent): { hit: boolean; result?: TuiMouseDispatchResult } {
+	/** Dispatch in visual order, offering outside presses before hit-testing lower layers. */
+	protected dispatchMouseToOverlay(event: TuiMouseEvent): {
+		hit: boolean;
+		/** The topmost hit overlay, even when it has no mouse handler. */
+		component?: Component;
+		result?: TuiMouseDispatchResult;
+		outside?: Pick<TuiMouseEventResult, "render">;
+	} {
+		let offeredOutside = false;
 		for (let index = this.renderedOverlayLayouts.length - 1; index >= 0; index--) {
 			const layout = this.renderedOverlayLayouts[index]!;
-			if (
-				event.screenX < layout.col ||
-				event.screenX >= layout.col + layout.width ||
-				event.screenY < layout.row ||
-				event.screenY >= layout.row + layout.height
-			) {
-				continue;
-			}
-			const result = dispatchMouseEvent(layout.entry.component, {
+			const entry = layout.entry;
+			// Visibility/removal can change before the next scheduled paint.
+			if (!this.overlayStack.includes(entry) || !this.isOverlayVisible(entry)) continue;
+			const localEvent = {
 				...event,
 				x: event.screenX - layout.col,
 				y: event.screenY - layout.row,
 				width: layout.width,
 				height: layout.height,
-			});
+			};
+			if (localEvent.x < 0 || localEvent.x >= layout.width || localEvent.y < 0 || localEvent.y >= layout.height) {
+				if (event.type === "press" && !offeredOutside && entry.options?.onOutsideMouse) {
+					offeredOutside = true;
+					const result = entry.options.onOutsideMouse(localEvent);
+					if (result?.handled) return { hit: true, outside: result };
+				}
+				continue;
+			}
+			const result = dispatchMouseEvent(entry.component, localEvent);
 			return result
 				? {
 						hit: true,
+						component: entry.component,
 						result: result.focus ? { ...result, focusTarget: layout.entry.component } : result,
 					}
-				: { hit: true };
+				: { hit: true, component: entry.component };
 		}
 		return { hit: false };
 	}

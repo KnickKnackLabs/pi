@@ -227,6 +227,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	private mousePressTarget?: TuiMouseDispatchTarget;
 	private mousePressPoint?: { x: number; y: number };
 	private mousePressMoved = false;
+	private outsideMousePressActive = false;
 	private lastComponentClick?: {
 		timestamp: number;
 		count: number;
@@ -556,10 +557,11 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		return search.component.getNavigationDirectionAt(y - bounds.row, x - bounds.col);
 	}
 
-	private handleSearchMouseEvent(event: SgrMouseEvent): boolean {
+	private handleSearchMouseEvent(event: SgrMouseEvent, overlayComponent: Component | undefined): boolean {
 		const search = this.activeSearch;
 		if (!search) return false;
-		const direction = this.getSearchNavigationDirectionAt(event.x, event.y);
+		const direction =
+			overlayComponent === search.component ? this.getSearchNavigationDirectionAt(event.x, event.y) : undefined;
 		if (search.component.setHoveredNavigationDirection(direction)) this.requestRender();
 		if (direction === undefined || event.release || (event.button & 32) !== 0 || (event.button & 3) !== 0) {
 			return false;
@@ -651,6 +653,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		this.mousePressTarget = undefined;
 		this.mousePressPoint = undefined;
 		this.mousePressMoved = false;
+		this.outsideMousePressActive = false;
 	}
 
 	private handleViewportInput(data: string): { consume?: boolean } | undefined {
@@ -884,6 +887,13 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 				: "press";
 		const event = this.createMouseEvent(type, raw.button, raw.x, raw.y);
 
+		// Outside handlers may remove their overlay. Retain only gesture ownership,
+		// never a callback into the dismissed component or extension runtime.
+		if (this.outsideMousePressActive) {
+			if (raw.release) this.clearComponentMouseGesture();
+			return;
+		}
+
 		if (this.mouseCapture || this.mousePressTarget) {
 			const target = this.mouseCapture ?? this.mousePressTarget!;
 			if (this.mousePressPoint && (raw.x !== this.mousePressPoint.x || raw.y !== this.mousePressPoint.y)) {
@@ -907,9 +917,19 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 			return;
 		}
 
-		if (this.handleSearchMouseEvent(raw)) return;
-
 		const overlay = this.dispatchMouseToOverlay(event);
+		if (overlay.outside) {
+			this.clearTextSelection();
+			this.clearComponentMouseGesture();
+			this.outsideMousePressActive = true;
+			this.lastComponentClick = undefined;
+			this.lastClick = undefined;
+			this.stopScrollbarHover();
+			if (overlay.outside.render !== false) this.requestRender();
+			return;
+		}
+		if (this.handleSearchMouseEvent(raw, overlay.component)) return;
+
 		if (!overlay.hit) {
 			if (this.handleScrollToEndIndicatorMouseEvent(raw)) return;
 			const scrollbarHandled = this.handleScrollbarMouseEvent(raw);
