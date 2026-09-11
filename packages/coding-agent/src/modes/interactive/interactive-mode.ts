@@ -153,7 +153,7 @@ import { ThinkingSelectorComponent } from "./components/thinking-selector.ts";
 import { ToolExecutionComponent } from "./components/tool-execution.ts";
 import { TreeSelectorComponent } from "./components/tree-selector.ts";
 import { TrustSelectorComponent } from "./components/trust-selector.ts";
-import { composeTurnBoundaryRenderer } from "./components/turn-boundary-renderer.ts";
+import { TurnBoundaryComponent } from "./components/turn-boundary.ts";
 import { UserMessageComponent } from "./components/user-message.ts";
 import { UserMessageSelectorComponent } from "./components/user-message-selector.ts";
 import { editInExternalEditor } from "./external-editor.ts";
@@ -436,7 +436,10 @@ export class InteractiveMode {
 	private streamingComponent: AssistantMessageComponent | undefined = undefined;
 
 	// Live renderer context is attached after the corresponding message entry is persisted.
-	private liveMessageComponents = new WeakMap<AgentMessage, UserMessageComponent | CustomMessageComponent>();
+	private liveMessageComponents = new WeakMap<
+		AgentMessage,
+		{ component: UserMessageComponent | CustomMessageComponent; boundary?: TurnBoundaryComponent }
+	>();
 	private toolCallMessageRenderContexts = new Map<string, SessionMessageRenderContext>();
 
 	// Tool execution tracking: toolCallId -> component
@@ -3183,8 +3186,9 @@ export class InteractiveMode {
 		if (!renderContext) return;
 
 		if (message.role === "user" || message.role === "custom") {
-			const component = this.liveMessageComponents.get(message);
-			component?.setRenderContext(renderContext);
+			const live = this.liveMessageComponents.get(message);
+			live?.component.setRenderContext(renderContext);
+			live?.boundary?.setRenderContext(renderContext);
 			this.liveMessageComponents.delete(message);
 			return;
 		}
@@ -3655,19 +3659,15 @@ export class InteractiveMode {
 			isReplay?: boolean;
 			renderContext?: SessionMessageRenderContext;
 		},
-	): Component {
-		const renderBoundary = composeTurnBoundaryRenderer(
-			() => new Spacer(1),
-			this.session.extensionRunner.getTurnBoundaryRendererTransforms(),
-		);
-		return renderBoundary(
+	): TurnBoundaryComponent {
+		return new TurnBoundaryComponent(
 			{
 				message,
 				renderContext: options?.renderContext ?? this.session.getMessageRenderContext(message),
 				source: options?.source,
 				isReplay: options?.isReplay ?? false,
 			},
-			theme,
+			this.session.extensionRunner.getTurnBoundaryRendererTransforms(),
 		);
 	}
 
@@ -3709,7 +3709,7 @@ export class InteractiveMode {
 					component.setExpanded(this.toolOutputExpanded);
 					this.chatContainer.addChild(component);
 					if (options?.isReplay !== true) {
-						this.liveMessageComponents.set(message, component);
+						this.liveMessageComponents.set(message, { component });
 					}
 				}
 				break;
@@ -3736,13 +3736,13 @@ export class InteractiveMode {
 			case "user": {
 				const textContent = this.getUserMessageText(message);
 				if (textContent) {
+					let boundary: TurnBoundaryComponent | undefined;
 					if (this.chatContainer.children.length > 0) {
 						const hasRenderedUserMessage = this.chatContainer.children.some(
 							(child) => child instanceof UserMessageComponent,
 						);
-						this.chatContainer.addChild(
-							hasRenderedUserMessage ? this.createTurnBoundary(message, options) : new Spacer(1),
-						);
+						if (hasRenderedUserMessage) boundary = this.createTurnBoundary(message, options);
+						this.chatContainer.addChild(boundary ?? new Spacer(1));
 					}
 					const skillBlock = parseSkillBlock(textContent) ?? undefined;
 					const userComponent = new UserMessageComponent(
@@ -3758,7 +3758,7 @@ export class InteractiveMode {
 					userComponent.setExpanded(this.toolOutputExpanded);
 					this.chatContainer.addChild(userComponent);
 					if (options?.isReplay !== true) {
-						this.liveMessageComponents.set(message, userComponent);
+						this.liveMessageComponents.set(message, { component: userComponent, boundary });
 					}
 					if (options?.populateHistory) {
 						this.editor.addToHistory?.(textContent);
