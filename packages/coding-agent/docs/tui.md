@@ -172,6 +172,32 @@ const result = await ctx.ui.custom<string | null>(
 );
 ```
 
+### Outside Mouse Presses
+
+In fullscreen mode, `overlayOptions.onOutsideMouse` can handle a press outside the overlay's last rendered bounds. Only the topmost eligible overlay is offered the press; declining it continues normal hit testing, rather than offering it to another outside handler. Hidden or removed overlays are skipped. Events use overlay-local `x`/`y` (which may be negative or out of bounds) and terminal `screenX`/`screenY`.
+
+```typescript
+let closeMenu: (() => void) | undefined;
+await ctx.ui.custom<void>(
+  (tui, theme, keybindings, done) => {
+    closeMenu = () => done();
+    return new MyMenu({ onClose: closeMenu });
+  },
+  {
+    overlay: true,
+    overlayOptions: {
+      onOutsideMouse: (event) => {
+        if (event.button !== "left") return undefined;
+        closeMenu?.();
+        return { handled: true };
+      },
+    },
+  }
+);
+```
+
+The extension decides whether to dismiss. Returning `{ handled: true }` consumes the whole gesture through release, even if the handler removes its overlay, so the underlying UI does not also receive a click. Rendering is requested unless `render: false` is returned. Outside callbacks do not receive hover, wheel, or a drag that began inside a component, and cannot request focus or capture. Without this option, existing mouse routing is unchanged. Regular mode leaves mouse input to the terminal.
+
 ### Overlay Focus
 
 A focused visible overlay keeps input ownership across temporary non-overlay UI. If an overlay opens another `ctx.ui.custom()` component without `{ overlay: true }`, that replacement UI receives input while it is active; when it closes, the focused overlay can reclaim input.
@@ -179,6 +205,8 @@ A focused visible overlay keeps input ownership across temporary non-overlay UI.
 Use `handle.unfocus()` when a visible overlay should stop owning input and let TUI fall back to another visible capturing overlay or the previous focus target. Use `handle.unfocus({ target })` when a specific component should receive input while the overlay stays visible. Passing `{ target: null }` intentionally leaves no focused component until focus is set again.
 
 ### Overlay Lifecycle
+
+Calling a custom component's `done` callback closes that invocation's overlay, not a newer overlay above it. Calling it before the factory resolves does not remove another overlay or mount the late result.
 
 Overlay components are disposed when closed. Don't reuse references - create fresh instances:
 
