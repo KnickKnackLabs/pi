@@ -196,10 +196,9 @@ const bunInstallDirectory = join(outDir, "bun-install");
 const binaryDirectory = join(outDir, "bun");
 mkdirSync(tarballDirectory, { recursive: true });
 
-// Release artifacts always use a freshly generated, strictly validated catalog,
-// including when checks or tests are explicitly skipped.
-run("npm", ["run", "generate:models"], { cwd: repoRoot });
-
+// Release artifacts use the pinned model catalog from the repository.
+// Live regeneration is deliberate maintenance (`npm run generate:models`),
+// not part of a build, so artifacts match the tested tree exactly.
 if (!options.skipCheck) {
 	run("npm", ["run", "check"], { cwd: repoRoot });
 }
