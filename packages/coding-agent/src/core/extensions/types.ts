@@ -153,6 +153,9 @@ export interface ExtensionUIContext {
 	/** Listen to raw terminal input (interactive mode only). Returns an unsubscribe function. */
 	onTerminalInput(handler: TerminalInputHandler): () => void;
 
+	/** Run synchronous cleanup after transcript rows are cleared, before reconstruction. Returns an unsubscribe function. */
+	onTranscriptReset(handler: () => void): () => void;
+
 	/** Set status text in the footer/status bar. Pass undefined to clear. */
 	setStatus(key: string, text: string | undefined): void;
 

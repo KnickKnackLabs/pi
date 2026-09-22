@@ -5,6 +5,7 @@
 ### Added
 
 - Added `ctx.modelRegistry.stream()` and `streamSimple()` for extension model calls through configured providers with resolved authentication ([#8964](https://github.com/earendil-works/pi/issues/8964)).
+- Added `ctx.ui.onTranscriptReset()` for synchronous cleanup of renderer registrations when the interactive transcript is cleared before reconstruction.
 
 ### Changed
 

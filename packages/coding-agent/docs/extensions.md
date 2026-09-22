@@ -1718,7 +1718,7 @@ The hook is display-only. It does not modify persisted messages or model context
 
 For `"branchSummary"` and `"custom"`, the delegated result is the **complete native row**, including its leading spacer, background and any registered custom message renderer. Its shell is `"self"`. Returning an empty component with `renderShell: "self"` suppresses the entire row, with no leftover spacer. `"default"` instead wraps your content in the standard custom-message box and leading spacer. Branch-summary options carry the canonical summary entry's `entryId`, not its `fromId`; they do not invent segment membership. Custom rows receive their canonical ID after persistence. These roles use `isStreaming: false`.
 
-A transform factory is created once per transcript component and retained through context, expansion and theme updates. Reload or transcript reconstruction creates fresh factories. A returned component may resolve shared display state inside `render(width)` when later rows change it; request a redraw through `ctx.ui.requestRender()` as needed. This does not change stored content or establish semantic relationships between entries.
+A transform factory is created once per transcript component and retained through context, expansion and theme updates. Reload or transcript reconstruction creates fresh factories. Use [`ctx.ui.onTranscriptReset()`](#transcript-reset) to discard registrations for removed components before a full reconstruction, without discarding presentation choices for the same messages. A returned component may resolve shared display state inside `render(width)` when later rows change it; request a redraw through `ctx.ui.requestRender()` as needed. This does not change stored content or establish semantic relationships between entries.
 
 See [built-in-message-renderer.ts](../examples/extensions/built-in-message-renderer.ts) for a complete wrapping example.
 
@@ -2694,6 +2694,24 @@ Extensions can interact with users via `ctx.ui` methods and customize how messag
 - Widgets above/below editor (setWidget)
 - Autocomplete providers layered on top of built-in slash/path completion (addAutocompleteProvider)
 - Custom footers (setFooter)
+
+### Transcript reset
+
+`ctx.ui.onTranscriptReset(handler)` subscribes to whole-transcript clears in the interactive TUI. The handler runs synchronously after the old rows are removed and before replacement renderers are constructed, including settings-driven rebuilds. Use it to retire references to old rendered components, not to infer a session change or erase user preferences.
+
+```typescript
+pi.on("session_start", (_event, ctx) => {
+  ctx.ui.onTranscriptReset(() => {
+    mountedRows.clear(); // Extension-owned registrations; presentation choices can remain separate.
+  });
+});
+```
+
+The returned function unsubscribes and is safe to call more than once. Subscriptions are also cleared when the extension UI is torn down for reload, session replacement, or shutdown; register again in the new `session_start`. Teardown does not itself notify old listeners. RPC, JSON, and print modes provide a no-op subscription.
+
+Handlers must finish cleanup before returning. Pi does not await promises; it reports thrown errors and accidental promise rejections without stopping other listeners or reconstruction. Listeners added during a notification start with the next reset; listeners removed before their turn are skipped.
+
+Ordinary redraws, resizing, streaming updates, tool expansion, and switching between regular and fullscreen mode do not notify. Neither does removing a single row: this hook is not per-component disposal. Existing session events still describe changes to the conversation itself.
 
 ### Dialogs
 

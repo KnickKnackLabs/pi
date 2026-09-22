@@ -247,6 +247,7 @@ const noOpUIContext: ExtensionUIContext = {
 	notify: () => {},
 	requestRender: () => {},
 	onTerminalInput: () => () => {},
+	onTranscriptReset: () => () => {},
 	setStatus: () => {},
 	setWorkingMessage: () => {},
 	setWorkingVisible: () => {},

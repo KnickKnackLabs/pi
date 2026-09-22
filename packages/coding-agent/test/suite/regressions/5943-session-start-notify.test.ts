@@ -17,6 +17,7 @@ function createUiContext(
 		notify: onNotify,
 		requestRender: () => {},
 		onTerminalInput: () => () => {},
+		onTranscriptReset: () => () => {},
 		setStatus: () => {},
 		setWorkingMessage: () => {},
 		setWorkingVisible: () => {},

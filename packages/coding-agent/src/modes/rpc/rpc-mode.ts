@@ -169,6 +169,11 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			return () => {};
 		},
 
+		onTranscriptReset(): () => void {
+			// Transcript rendering is owned by the RPC client.
+			return () => {};
+		},
+
 		setStatus(key: string, text: string | undefined): void {
 			// Fire and forget - no response needed
 			output({
