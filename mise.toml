@@ -1,0 +1,16 @@
+# Local toolchain for building, testing, and releasing the KKL fork.
+# Run tasks through `mise run` so the pinned real binaries are on PATH;
+# the test sandbox in test.sh strips ambient state that mise shims need.
+[tools]
+node = "26.10.0"
+bun = "1.4.2"
+fd = "10.5.0"
+ripgrep = "15.2.0"
+
+[tasks.test]
+description = "Run the isolated test suite"
+run = "./test.sh"
+
+[tasks."release:local"]
+description = "Build and smoke an unpublished release (extra args are appended)"
+run = "npm run release:local"
