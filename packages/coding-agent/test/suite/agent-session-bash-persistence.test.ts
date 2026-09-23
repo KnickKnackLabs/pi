@@ -230,6 +230,7 @@ describe("AgentSession bash and persistence characterization", () => {
 			"message",
 			"message",
 			"message",
+			"message",
 			"agent_segment_completion",
 		]);
 		expect(harness.session.messages.map((message) => message.role)).toEqual([

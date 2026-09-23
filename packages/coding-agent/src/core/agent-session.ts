@@ -1144,6 +1144,10 @@ export class AgentSession {
 					event.message.details,
 				);
 				this._recordPersistedMessage(event.message, entryId);
+			} else if (event.message.role === "system") {
+				// System messages persist outside conversation segments.
+				entryId = this.sessionManager.appendMessage(event.message);
+				this._recordPersistedMessage(event.message, entryId);
 			} else if (
 				event.message.role === "user" ||
 				event.message.role === "assistant" ||

@@ -256,7 +256,12 @@ describe("AgentSession actionable boundaries", () => {
 		});
 		harnesses.push(harness);
 		harness.session.subscribe((event) => {
-			if (event.type === "entry_appended") snapshots.push(JSON.stringify(harness.session.messages));
+			if (
+				event.type === "entry_appended" &&
+				(event.entry.type === "custom" || event.entry.type === "custom_message")
+			) {
+				snapshots.push(JSON.stringify(harness.session.messages));
+			}
 		});
 		harness.setResponses([fauxAssistantMessage("done")]);
 
@@ -429,7 +434,7 @@ describe("AgentSession actionable boundaries", () => {
 		expect(lifecycle).toEqual([
 			"start",
 			"settled-first:true",
-			"settled-second:true",
+			"settled-second:false", // the queued follow-up is pending, but has not started
 			"start",
 			"settled-first:true",
 			"settled-second:true",
