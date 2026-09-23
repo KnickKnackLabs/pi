@@ -338,6 +338,7 @@ class TreeList implements Component {
 
 		this.filteredNodes = this.flatNodes.filter((flatNode) => {
 			const entry = flatNode.node.entry;
+			if (entry.type === "usage") return false;
 			const isCurrentLeaf = entry.id === this.currentLeafId;
 
 			// Skip assistant messages with only tool calls (no text) unless error/aborted
@@ -358,6 +359,7 @@ class TreeList implements Component {
 			const isSettingsEntry =
 				entry.type === "agent_segment_completion" ||
 				entry.type === "label" ||
+				entry.type === "context_edit" ||
 				entry.type === "custom" ||
 				entry.type === "model_change" ||
 				entry.type === "thinking_level_change" ||
@@ -610,6 +612,9 @@ class TreeList implements Component {
 			case "custom":
 				parts.push("custom", entry.customType);
 				break;
+			case "context_edit":
+				parts.push("context edit", entry.replacement === null ? "omit" : "replace", entry.targetId);
+				break;
 			case "label":
 				parts.push("label", entry.label ?? "");
 				break;
@@ -842,6 +847,9 @@ class TreeList implements Component {
 				break;
 			case "custom":
 				result = theme.fg("dim", `[custom: ${entry.customType}]`);
+				break;
+			case "context_edit":
+				result = theme.fg("dim", `[context ${entry.replacement === null ? "omit" : "replace"}: ${entry.targetId}]`);
 				break;
 			case "label":
 				result = theme.fg("dim", `[label: ${entry.label ?? "(cleared)"}]`);

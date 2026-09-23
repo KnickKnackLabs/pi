@@ -21,19 +21,22 @@ function segmentCompletions(harness: Harness): AgentSegmentCompletionEntry[] {
 }
 
 function providerMessageLabel(message: Message): string {
+	if (message.role === "system") return "system:";
 	if (message.role === "user") {
 		return `user:${getMessageText(message)}`;
 	}
 	if (message.role === "toolResult") {
 		return `toolResult:${message.toolName}:${getMessageText(message)}`;
 	}
-	const content = message.content
-		.map((part) => {
-			if (part.type === "toolCall") return `tool:${part.name}`;
-			if (part.type === "thinking") return `thinking:${part.thinking}`;
-			return part.text;
-		})
-		.join("|");
+	const content = Array.isArray(message.content)
+		? message.content
+				.map((part: { type: string; name?: string; thinking?: string; text?: string }) => {
+					if (part.type === "toolCall") return `tool:${part.name}`;
+					if (part.type === "thinking") return `thinking:${part.thinking}`;
+					return part.text ?? "";
+				})
+				.join("|")
+		: String(message.content);
 	return `assistant:${content}`;
 }
 
@@ -85,9 +88,11 @@ describe("AgentSession persisted conversation segments", () => {
 		await harness.session.prompt("hi");
 
 		expect(persistedMessages(harness)).toMatchObject([
+			{ message: { role: "system" } },
 			{ segmentNumber: 1, segmentKind: "user", inputKind: "normal", message: { role: "user" } },
 			{ segmentNumber: 2, segmentKind: "agent", message: { role: "assistant" } },
 		]);
+		expect(persistedMessages(harness)[0]?.segmentNumber).toBeUndefined();
 	});
 
 	it("persists completion before agent_settled and emits it once", async () => {
@@ -262,8 +267,9 @@ describe("AgentSession persisted conversation segments", () => {
 		await harness.session.prompt("second");
 
 		expect(projectedCalls).toEqual([
-			["user:[segment 1 starts]", "user:first", "user:[segment 1 ends]", "user:[segment 2 starts]"],
+			["system:", "user:[segment 1 starts]", "user:first", "user:[segment 1 ends]", "user:[segment 2 starts]"],
 			[
+				"system:",
 				"user:[segment 1 starts]",
 				"user:first",
 				"user:[segment 1 ends]",
@@ -272,6 +278,7 @@ describe("AgentSession persisted conversation segments", () => {
 				"toolResult:inspect:observed",
 			],
 			[
+				"system:",
 				"user:[segment 1 starts]",
 				"user:first",
 				"user:[segment 1 ends]",
@@ -385,6 +392,7 @@ describe("AgentSession persisted conversation segments", () => {
 			},
 		]);
 		expect(persistedMessages(harness)).toMatchObject([
+			{ message: { role: "system" } },
 			{ segmentNumber: 1, segmentKind: "user", inputKind: "normal", message: { role: "user" } },
 			{ segmentNumber: 2, segmentKind: "agent", message: { role: "assistant" } },
 		]);
@@ -423,6 +431,12 @@ describe("AgentSession persisted conversation segments", () => {
 		});
 
 		expect(observed).toMatchObject([
+			{
+				role: "system",
+				entryId: expect.any(String),
+				persistedType: "message",
+				persistedRole: "system",
+			},
 			{
 				role: "user",
 				entryId: expect.any(String),

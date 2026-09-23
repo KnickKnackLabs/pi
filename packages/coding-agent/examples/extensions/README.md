@@ -36,7 +36,6 @@ cp permission-gate.ts ~/.pi/agent/extensions/
 | `questionnaire.ts` | Multi-question input with tab bar navigation between questions |
 | `tool-transform.ts` | Wrap an existing tool while preserving its configured execution and rendering |
 | `dynamic-tools.ts` | Register tools after startup (`session_start`) and at runtime via command, with prompt snippets and tool-specific prompt guidelines |
-| `kimi-deferred-tools.ts` | Search for and progressively activate tools for Kimi's deferred-tool loading protocol |
 | `structured-output.ts` | Final structured-output tool that returns `terminate: true` so the agent can end on the tool call |
 | `built-in-tool-renderer.ts` | Custom compact rendering for built-in tools (read, bash, edit, write) while keeping original behavior |
 | `minimal-mode.ts` | Override built-in tool rendering for minimal display (only tool calls, no output in collapsed mode) |
