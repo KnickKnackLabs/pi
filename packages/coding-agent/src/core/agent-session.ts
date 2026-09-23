@@ -130,9 +130,8 @@ import {
 import { sessionMessageEntryToRenderContext } from "./session-message-render-context.ts";
 import type { CacheWarmingMode, SettingsManager } from "./settings-manager.ts";
 import type { SlashCommandInfo } from "./slash-commands.ts";
-import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.ts";
+import { createSyntheticSourceInfo } from "./source-info.ts";
 import {
-	type BuildSystemPromptOptions,
 	buildSystemPrompt,
 	buildSystemPromptSections,
 	diffSystemPromptSections,
@@ -1133,8 +1132,8 @@ export class AgentSession {
 
 		// Persist completed messages before notifying public session listeners so live
 		// renderers can resolve the same canonical entry context used during replay.
+		let entryId: string | undefined;
 		if (event.type === "message_end") {
-			let entryId: string | undefined;
 			// Check if this is a custom message from extensions
 			if (event.message.role === "custom") {
 				// Persist as CustomMessageEntry
@@ -1146,7 +1145,6 @@ export class AgentSession {
 				);
 				this._recordPersistedMessage(event.message, entryId);
 			} else if (
-				event.message.role === "system" ||
 				event.message.role === "user" ||
 				event.message.role === "assistant" ||
 				event.message.role === "toolResult"
@@ -1730,7 +1728,7 @@ export class AgentSession {
 				this._userSegments.delete(userMessage);
 			}
 			if (this._agentRunAbortRequested) this._finishCancelledRetry();
-			this._systemPromptOverride = undefined;
+			this._runSystemPromptOptions = undefined;
 			this._flushPendingBashMessages();
 			this._flushPendingCustomMessages();
 			await this._emitAgentSettled();

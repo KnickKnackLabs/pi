@@ -290,7 +290,11 @@ function createExtensionAPI(
 					registrationOrder: runtime.nextToolTransformRegistrationOrder++,
 				});
 			} else {
-				if (typeof toolOrName.parameters !== "object" || toolOrName.parameters === null || Array.isArray(toolOrName.parameters)) {
+				if (
+					typeof toolOrName.parameters !== "object" ||
+					toolOrName.parameters === null ||
+					Array.isArray(toolOrName.parameters)
+				) {
 					throw new Error(
 						`Tool "${toolOrName.name}" registered by extension "${extension.path}" must define an object parameter schema.`,
 					);

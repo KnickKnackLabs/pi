@@ -104,7 +104,12 @@ import { CredentialSynchronizationError } from "../../core/model-runtime.ts";
 import { DefaultPackageManager, type StartupPackageUpdateResult } from "../../core/package-manager.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
-import { type SessionEntry, SessionManager, sessionEntryToContextMessages, type UsageEntry } from "../../core/session-manager.ts";
+import {
+	type SessionEntry,
+	SessionManager,
+	sessionEntryToContextMessages,
+	type UsageEntry,
+} from "../../core/session-manager.ts";
 import { sessionMessageEntryToRenderContext } from "../../core/session-message-render-context.ts";
 import type { FullscreenExitOutput, TuiMode } from "../../core/settings-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
@@ -252,7 +257,10 @@ type RenderSessionMessageItem = {
 	renderContext: SessionMessageRenderContext;
 };
 
-type RenderSessionItem = RenderSessionMessageItem | Extract<SessionEntry, { type: "custom" | "usage" }> | CompactionCostNotice;
+type RenderSessionItem =
+	| RenderSessionMessageItem
+	| Extract<SessionEntry, { type: "custom" | "usage" }>
+	| CompactionCostNotice;
 
 function isCustomSessionEntry(item: RenderSessionItem): item is Extract<SessionEntry, { type: "custom" }> {
 	return "type" in item && item.type === "custom";
@@ -478,7 +486,6 @@ export class InteractiveMode {
 	>();
 	private toolCallMessageRenderContexts = new Map<string, SessionMessageRenderContext>();
 	private readonly entriesRenderedByBoundaryCompaction = new Set<string>();
-	private streamingMessage: AssistantMessage | undefined = undefined;
 
 	// Tool execution tracking: toolCallId -> component
 	private pendingTools = new Map<string, ToolExecutionComponent>();
@@ -3535,15 +3542,15 @@ export class InteractiveMode {
 							});
 						}
 						this.pendingTools.clear();
-						this.maybeSuggestBugReport(this.streamingMessage);
+						this.maybeSuggestBugReport(assistantMessage);
 					} else {
 						// Args are now complete - trigger diff computation for edit tools
 						for (const [, component] of this.pendingTools.entries()) {
 							component.setArgsComplete();
 						}
 						this.maybeShowAssistantDiagnostics(assistantMessage);
-						this.maybeShowThinkingDropNotice(this.streamingMessage);
-						this.maybeShowCacheMissNotice(this.streamingMessage);
+						this.maybeShowThinkingDropNotice(assistantMessage);
+						this.maybeShowCacheMissNotice(assistantMessage);
 					}
 					this.streamingComponent = undefined;
 					this.footer.invalidate();
@@ -4123,6 +4130,32 @@ export class InteractiveMode {
 			).length;
 		}
 		return count;
+	}
+
+	private maybeShowAssistantDiagnostics(message: AssistantMessage): void {
+		if (!this.settingsManager.getShowCacheMissNotices()) return;
+
+		for (const diagnostic of message.diagnostics ?? []) {
+			if (diagnostic.type !== "anthropic_input_transformations") continue;
+			const transformations = diagnostic.details?.transformations;
+			if (!Array.isArray(transformations)) continue;
+
+			const dropped = transformations.flatMap((transformation): string[] => {
+				if (typeof transformation !== "object" || transformation === null) return [];
+				const details = transformation as Record<string, unknown>;
+				if (details.type !== "thinking_dropped") return [];
+				const reason = typeof details.reason === "string" ? details.reason : "unknown reason";
+				const location = typeof details.path === "string" ? ` at ${details.path}` : "";
+				return [`${reason}${location}`];
+			});
+			if (dropped.length === 0) continue;
+
+			const noun = dropped.length === 1 ? "thinking block" : `${dropped.length} thinking blocks`;
+			this.chatContainer.addChild(new Spacer(1));
+			this.chatContainer.addChild(
+				new Text(theme.fg("warning", `Anthropic dropped ${noun}: ${dropped.join("; ")}`), 1, 0),
+			);
+		}
 	}
 
 	private maybeShowThinkingDropNotice(message: AssistantMessage): void {

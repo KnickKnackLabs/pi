@@ -27,13 +27,15 @@ function providerMessageLabel(message: Message): string {
 	if (message.role === "toolResult") {
 		return `toolResult:${message.toolName}:${getMessageText(message)}`;
 	}
-	const content = message.content
-		.map((part) => {
-			if (part.type === "toolCall") return `tool:${part.name}`;
-			if (part.type === "thinking") return `thinking:${part.thinking}`;
-			return part.text;
-		})
-		.join("|");
+	const content = Array.isArray(message.content)
+		? message.content
+				.map((part: { type: string; name?: string; thinking?: string; text?: string }) => {
+					if (part.type === "toolCall") return `tool:${part.name}`;
+					if (part.type === "thinking") return `thinking:${part.thinking}`;
+					return part.text ?? "";
+				})
+				.join("|")
+		: String(message.content);
 	return `assistant:${content}`;
 }
 
