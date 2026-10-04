@@ -161,7 +161,7 @@ function publishPackages(packages, dryRun) {
 			continue;
 		}
 
-		run("npm", ["publish", "--access", "public", "--provenance", "--ignore-scripts"], {
+		run("npm", ["publish", "--tag", "latest", "--access", "public", "--provenance", "--ignore-scripts"], {
 			cwd: pkg.directory,
 		});
 		console.log();

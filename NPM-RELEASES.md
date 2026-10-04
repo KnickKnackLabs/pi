@@ -24,6 +24,11 @@ node scripts/publish.mjs --scope knickknacklabs --pack-only --out /tmp/pi-npm-re
 This requires an existing validated build. Publishing those archives is a
 separate human-approved step; do not run it merely to test installation.
 
+The fork uses the explicit npm dist-tag `latest`. For an approved local bootstrap,
+include `--tag latest --access public --ignore-scripts --provenance=false` when
+publishing each reviewed archive. Current npm rejects prerelease-form versions
+with an implicit dist-tag. Local bootstrap does not claim GitHub provenance.
+
 Once the packages exist, configure each package's trusted publisher on npm:
 
 - GitHub organization: `KnickKnackLabs`

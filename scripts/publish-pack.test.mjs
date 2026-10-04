@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,7 +29,7 @@ async function writePackage(root, directoryName, manifest) {
 	await mkdir(join(directory, "dist"), { recursive: true });
 	await writeFile(join(directory, "package.json"), JSON.stringify({
 		...manifest,
-		version: "1.2.3",
+		version: manifest.version ?? "1.2.3",
 		files: ["dist"],
 		scripts: { prepack: "node prepack.mjs" },
 	}));
@@ -75,6 +75,54 @@ test("pack-only saves scoped tarballs without registry access, lifecycle scripts
 		});
 		assert.equal(inspected.status, 0, inspected.stderr);
 		assert.equal(JSON.parse(inspected.stdout)[0].name, "@pack-test-org/pi-ai");
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("publication explicitly tags fork prereleases and keeps provenance and lifecycle guards", { skip: process.platform === "win32" }, async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-publish-command-test-"));
+	try {
+		await writePackage(root, "ai", { name: "@earendil-works/pi-ai", version: "0.87.1-kkl.2" });
+		const bin = join(root, "bin");
+		await mkdir(bin);
+		const shim = join(bin, "npm");
+		const log = join(root, "npm-calls.jsonl");
+		// Only packing delegates to real npm. Registry queries and publication are inert.
+		await writeFile(shim, `#!${process.execPath}
+import { appendFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+const args = process.argv.slice(2);
+appendFileSync(process.env.PI_TEST_NPM_LOG, JSON.stringify(args) + "\\n");
+if (args[0] === "pack") {
+  const result = spawnSync("npm", args, { stdio: "inherit", env: { ...process.env, PATH: process.env.PI_TEST_ORIGINAL_PATH } });
+  process.exit(result.status ?? 1);
+}
+if (args[0] === "view") {
+  console.error("E404 Not Found (offline test fixture)");
+  process.exit(1);
+}
+if (args[0] !== "publish") process.exit(1);
+`);
+		await chmod(shim, 0o755);
+		const result = spawnSync(process.execPath, [publishScript, "--scope", "pack-test-org"], {
+			cwd: root,
+			encoding: "utf8",
+			timeout: 20_000,
+			env: {
+				...process.env,
+				PATH: `${bin}:${process.env.PATH}`,
+				PI_TEST_ORIGINAL_PATH: process.env.PATH,
+				PI_TEST_NPM_LOG: log,
+				npm_config_offline: "true",
+			},
+		});
+		assert.equal(result.status, 0, result.stderr);
+		const calls = (await readFile(log, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+		assert.deepEqual(calls.filter((args) => args[0] === "publish"), [
+			["publish", "--tag", "latest", "--access", "public", "--provenance", "--ignore-scripts"],
+		]);
+		assert.ok(calls.some((args) => args[0] === "view" && args[1] === "@pack-test-org/pi-ai@0.87.1-kkl.2"));
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}
