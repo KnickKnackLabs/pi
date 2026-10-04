@@ -1,0 +1,86 @@
+name: KKL npm Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Signed fork release tag containing the scoped publisher, e.g. v0.87.1-kkl.2"
+        required: true
+        type: string
+      publish:
+        description: "Publish missing npm versions (false only validates)"
+        required: true
+        default: false
+        type: boolean
+
+permissions: {}
+
+concurrency:
+  group: kkl-npm-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.repository == 'KnickKnackLabs/pi'
+    runs-on: ubuntu-latest
+    environment: npm-publish
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+      - name: Validate fork tag
+        shell: bash
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-kkl\.[0-9]+$ ]]; then
+            echo "Expected vX.Y.Z-kkl.N" >&2
+            exit 1
+          fi
+
+      - name: Checkout release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install npm with trusted publishing support
+        run: npm install --global npm@11.5.1 --ignore-scripts --no-audit --no-fund
+
+      - name: Verify package version matches tag
+        shell: bash
+        run: |
+          expected="${RELEASE_TAG#v}"
+          actual="$(node -p "require('./packages/coding-agent/package.json').version")"
+          if [ "$actual" != "$expected" ]; then
+            echo "Package version $actual does not match $expected" >&2
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Check source and packaging tests
+        run: |
+          npm run check
+          node --test scripts/scoped-packages.test.mjs scripts/publish-pack.test.mjs scripts/verify-scoped-release.test.mjs
+
+      - name: Build with pinned model data
+        run: npm run build:offline
+
+      - name: Validate scoped packages
+        run: node scripts/publish.mjs --scope knickknacklabs --dry-run
+
+      - name: Publish missing scoped versions
+        if: inputs.publish
+        run: node scripts/publish.mjs --scope knickknacklabs
+
+      - name: Verify published archives and fresh consumer
+        if: inputs.publish
+        run: node scripts/verify-scoped-release.mjs --scope knickknacklabs

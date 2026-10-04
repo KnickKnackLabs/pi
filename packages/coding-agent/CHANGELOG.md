@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.87.1-kkl.2] - 2026-10-03
+
+### Added
+
+- Added fork npm packaging under `@knickknacklabs/*`, preserving extension import names through sibling dependency aliases.
+- Added manual npm release validation and fresh registry consumer verification with pinned model data.
+
 ## [0.87.1] - 2026-09-22
 
 ### New Features
