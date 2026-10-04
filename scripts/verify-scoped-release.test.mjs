@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -14,6 +14,44 @@ test("consumer verifier rejects missing or invalid scope before workspace inspec
 		assert.equal(result.status, 1);
 		assert.match(result.stderr, /Usage:|lowercase npm/);
 		assert.equal(result.stdout, "");
+	}
+});
+
+test("runtime fixture resolves nested shrinkwrapped siblings without top-level hoisting", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-nested-consumer-test-"));
+	try {
+		const codingAgent = join(root, "node_modules/@earendil-works/pi-coding-agent");
+		const nested = join(codingAgent, "node_modules/@earendil-works");
+		await mkdir(nested, { recursive: true });
+		await writeFile(join(codingAgent, "package.json"), JSON.stringify({ name: "@knickknacklabs/pi-coding-agent", type: "module", exports: { ".": { import: "./index.js" } } }));
+		await writeFile(join(codingAgent, "index.js"), "export function createAgentSession() {}\n");
+		const siblings = {
+			"pi-agent-core": "export class Agent {}\n",
+			"pi-ai": "export const Type = { Object() {} };\n",
+			"pi-tui": "export class Text { constructor(text) { this.text = text; } render(width) { return [this.text.padEnd(width)]; } }\n",
+		};
+		const packages = {};
+		for (const [name, source] of Object.entries(siblings)) {
+			const directory = join(nested, name);
+			await mkdir(directory);
+			await writeFile(join(directory, "package.json"), JSON.stringify({ name: `@knickknacklabs/${name}`, type: "module", exports: { ".": { import: "./index.js" } } }));
+			await writeFile(join(directory, "index.js"), source);
+			packages[`node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/${name}`] = { name: `@knickknacklabs/${name}`, version: "1.2.3" };
+		}
+		packages["node_modules/@earendil-works/pi-coding-agent"] = { name: "@knickknacklabs/pi-coding-agent", version: "1.2.3" };
+		const lockfile = join(root, "package-lock.json");
+		await writeFile(lockfile, JSON.stringify({ packages }));
+		const fixture = join(codingAgent, "consumer-check.mjs");
+		await copyFile(fileURLToPath(new URL("./fixtures/scoped-consumer/imports.mjs", import.meta.url)), fixture);
+		const result = spawnSync(process.execPath, [fixture], {
+			cwd: root,
+			encoding: "utf8",
+			env: { ...process.env, PI_CONSUMER_SCOPE: "knickknacklabs", PI_CONSUMER_VERSION: "1.2.3", PI_CONSUMER_LOCKFILE: lockfile },
+		});
+		assert.equal(result.status, 0, result.stderr);
+		assert.match(result.stdout, /Verified 4 fork packages/);
+	} finally {
+		await rm(root, { recursive: true, force: true });
 	}
 });
 

@@ -9,7 +9,8 @@ const scope = process.env.PI_CONSUMER_SCOPE;
 const version = process.env.PI_CONSUMER_VERSION;
 assert.ok(scope && version, "Expected scope and version must be supplied");
 
-const lock = JSON.parse(readFileSync(new URL("./package-lock.json", import.meta.url), "utf8"));
+assert.ok(process.env.PI_CONSUMER_LOCKFILE, "Consumer lockfile path must be supplied");
+const lock = JSON.parse(readFileSync(process.env.PI_CONSUMER_LOCKFILE, "utf8"));
 let forkCount = 0;
 for (const [location, entry] of Object.entries(lock.packages)) {
 	const importName = location.split("node_modules/").at(-1);

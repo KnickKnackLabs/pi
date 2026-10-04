@@ -36,7 +36,12 @@ function run(command, args, capture = false) {
 		encoding: "utf8",
 		timeout: 120_000,
 		stdio: capture ? ["ignore", "pipe", "pipe"] : "inherit",
-		env: { ...process.env, PI_CONSUMER_SCOPE: scope, PI_CONSUMER_VERSION: version },
+		env: {
+			...process.env,
+			PI_CONSUMER_SCOPE: scope,
+			PI_CONSUMER_VERSION: version,
+			PI_CONSUMER_LOCKFILE: join(consumerDirectory, "package-lock.json"),
+		},
 	});
 	if (result.error || result.status !== 0) {
 		throw new Error(`Consumer check failed: ${command} ${args.join(" ")}\n${result.error ?? result.stderr ?? ""}`);
@@ -72,7 +77,9 @@ try {
 	);
 	run("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund", "--fetch-retries=0"]);
 	copyFileSync(join(fixtures, "extension.ts"), join(consumerDirectory, "extension.ts"));
-	copyFileSync(join(fixtures, "imports.mjs"), join(consumerDirectory, "imports.mjs"));
+	// npm may keep shrinkwrapped siblings nested rather than hoisting them.
+	const runtimeFixture = join(consumerDirectory, "node_modules/@earendil-works/pi-coding-agent/consumer-check.mjs");
+	copyFileSync(join(fixtures, "imports.mjs"), runtimeFixture);
 	run(compiler, [
 		"--noEmit",
 		"--strict",
@@ -85,7 +92,7 @@ try {
 		"Bundler",
 		"extension.ts",
 	]);
-	run(process.execPath, ["imports.mjs"]);
+	run(process.execPath, [runtimeFixture]);
 	console.log("Published consumer check passed (dependency declaration checking skipped).");
 } finally {
 	rmSync(consumerDirectory, { recursive: true, force: true });
